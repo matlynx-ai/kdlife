@@ -157,6 +157,8 @@ label.lbl{display:block;font-size:11px;letter-spacing:.8px;text-transform:upperc
 .meter{height:8px;border-radius:4px;background:#ffffff1f;margin-top:6px;overflow:hidden}.meter i{display:block;height:100%;background:var(--gold)}
 .btnrow2{display:flex;gap:6px}.btnrow2 .btn{min-width:64px;padding:8px 12px}
 .sh{margin:14px 0 4px;font-family:var(--display);font-size:16px}
+input{-webkit-user-select:text;user-select:text}
+.dock button{padding:0 4px;font-size:12px}
 </style>
 
 <div id="app">
@@ -180,6 +182,7 @@ label.lbl{display:block;font-size:11px;letter-spacing:.8px;text-transform:upperc
     <button data-d="board">Board</button>
     <button data-d="lingo">Lingo</button>
     <button data-d="hero">Hero</button>
+    <button data-d="chat">Chat</button>
     <button data-d="me">Me</button>
     <button data-d="ads" id="bAds" hidden>Ads</button>
     <button data-d="sound" id="bSound">Sound on</button>
@@ -212,6 +215,8 @@ label.lbl{display:block;font-size:11px;letter-spacing:.8px;text-transform:upperc
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.58.0/dist/umd/supabase.min.js"></script>
+<script src="config.js" onerror="void 0"></script>
 <script>
 (() => {
 'use strict';
@@ -797,8 +802,9 @@ const Ads = (() => {
   }
   async function connect(){
     try{
-      const c = window.claude; if(!c || !c.use) return;
-      db = await c.use('db'); user = await c.use('user'); if(!db) return; dbOk = true;
+      if(typeof Online !== 'undefined' && Online.ready){ db = Online.db(); user = Online.user(); }
+      else { const c = window.claude; if(!c || !c.use) return; db = await c.use('db'); user = await c.use('user'); }
+      if(!db) return; dbOk = true;
       try{ uid = user && user.id ? await user.id() : null; }catch(e){}
       try{ isAdm = !!(user && ((await user.isOwner()) || (await user.canEdit()))); }catch(e){}
       const bad = e => {};
@@ -940,7 +946,7 @@ const AdminUI = (() => {
     if(a === 'toggle'){ const c = Ads.allCamps().find(x => x.id === id); const n = Object.assign({}, c, {status:c.status==='active'?'paused':'active'}); await save(D().doc('campaigns/'+id).set(n)); return render(); }
     if(a === 'dup'){ const c = Ads.allCamps().find(x => x.id === id); const n = Object.assign({}, c, {id:uidn(), sample:false, status:'draft', advertiser:c.advertiser+' (copy)'}); await save(D().doc('campaigns/'+n.id).set(n)); return render(); }
     if(a === 'seed'){ const all = SAMPLE_CAMPS.map(c => D().doc('campaigns/'+c.id).set(Object.assign({}, c))); await save(Promise.all(all)); return render(); }
-    if(a === 'csv'){ try{ const dl = await claude.use('downloads'); if(dl) await dl.save({filename:'kdlife-billboard-report.csv', data:csv()}); else { msg = 'Downloads are unavailable here.'; flash(); } }catch(err){ msg = 'Export cancelled.'; flash(); } return; }
+    if(a === 'csv'){ try{ const dl = window.claude && window.claude.use ? await window.claude.use('downloads') : null; if(dl) await dl.save({filename:'kdlife-billboard-report.csv', data:csv()}); else { const u = URL.createObjectURL(new Blob([csv()],{type:'text/csv'})), el = document.createElement('a'); el.href = u; el.download = 'kdlife-billboard-report.csv'; document.body.appendChild(el); el.click(); el.remove(); setTimeout(() => URL.revokeObjectURL(u), 3000); } }catch(err){ msg = 'Export cancelled.'; flash(); } return; }
     if(a === 'resetimp'){ Ads.resetLocal(); msg = 'Cleared.'; flash(); return render(); }
   });
   root.addEventListener('input', e => {
@@ -958,6 +964,113 @@ const AdminUI = (() => {
   });
   Ads.on(() => { if(!root.hidden && !draft && document.activeElement && !root.contains(document.activeElement) || (!root.hidden && !draft && !(document.activeElement && /INPUT|SELECT/.test(document.activeElement.tagName)))) render(); });
   return {open, close};
+})();
+
+/* =====================================================================
+   ONLINE MODE (Supabase): live boards, other players, shared billboards.
+   Needs config.js with {url, key}. Without it the game runs offline.
+   ===================================================================== */
+const PHRASES = ['Sannu!','Barka da zuwa!','Yauwa!','Gaskiya!','Mu yi kwallo?','Keke race?','Wow!','Sai an jima','Ina Unguwa?','Na gode!'];
+const Online = (() => {
+  const cfg = window.KDL_CONFIG || {};
+  let sb = null, uid = null, ready = false, admin = false, chan = null, count = 0, syncedKey = '';
+  const others = new Map(), watchers = []; let docsCh = null, sendT = 0, lastSent = '';
+  const now = () => performance.now();
+  async function init(){
+    try{
+      if(!cfg.url || !cfg.key || !window.supabase) return false;
+      sb = window.supabase.createClient(cfg.url, cfg.key, {auth:{persistSession:true, autoRefreshToken:true}});
+      let s = (await sb.auth.getSession()).data.session;
+      if(!s){ const r = await sb.auth.signInAnonymously(); if(r.error) throw r.error; s = r.data.session; }
+      uid = s.user.id; ready = true;
+      try{ const r = await sb.from('admins').select('user_id').eq('user_id', uid); admin = !!(r.data && r.data.length); }catch(e){}
+      joinHub(); return true;
+    }catch(e){ ready = false; return false; }
+  }
+  async function sync(){
+    if(!ready) return; const key = [S.name,S.unguwa,S.char,level()].join('|'); if(key === syncedKey) return; syncedKey = key;
+    try{ await sb.from('profiles').upsert({id:uid, name:S.name, unguwa:S.unguwa, char_id:S.char, level:level(), updated_at:new Date().toISOString()}); }catch(e){}
+  }
+  async function report(game, score){ if(!ready) return; await sync(); try{ await sb.rpc('submit_score', {g:game, s:Math.max(0,Math.floor(score))}); }catch(e){} }
+  async function board(game){ try{ const r = await sb.from('leaderboard').select('name,unguwa,best,user_id').eq('game',game).order('best',{ascending:false}).limit(20); return r.data || []; }catch(e){ return []; } }
+  async function unguwas(){ try{ const r = await sb.from('unguwa_totals').select('*').order('total',{ascending:false}); return r.data || []; }catch(e){ return []; } }
+  async function login(email, pass){ const r = await sb.auth.signInWithPassword({email, password:pass}); if(r.error) throw r.error; return true; }
+  async function logout(){ try{ await sb.auth.signOut(); }catch(e){} }
+
+  /* ---- document store adapter, so the Ads panel works unchanged ---- */
+  function watch(prefix, fn){
+    watchers.push({prefix, fn, t:0});
+    if(!docsCh){
+      docsCh = sb.channel('docs-live').on('postgres_changes', {event:'*', schema:'public', table:'docs'}, p => {
+        const path = (p.new && p.new.path) || (p.old && p.old.path) || '';
+        for(const w of watchers) if(path.indexOf(w.prefix) === 0){ clearTimeout(w.t); w.t = setTimeout(w.fn, 250); }
+      }).subscribe();
+      setInterval(() => watchers.forEach(w => w.fn()), 90000);
+    }
+  }
+  const rowsOf = async col => { const r = await sb.from('docs').select('path,data').like('path', col+'/%'); if(r.error) throw r.error; return r.data || []; };
+  function db(){
+    return {
+      doc: path => ({
+        set: async d => { const r = await sb.from('docs').upsert({path, data:d, updated_at:new Date().toISOString()}); if(r.error) throw r.error; },
+        delete: async () => { const r = await sb.from('docs').delete().eq('path', path); if(r.error) throw r.error; },
+        get: async () => { const r = await sb.from('docs').select('data').eq('path', path).maybeSingle(); return {exists:!!(r.data), data:() => r.data && r.data.data}; },
+        onSnapshot: next => { const run = async () => { try{ const r = await sb.from('docs').select('data').eq('path', path).maybeSingle(); next({exists:!!(r.data), data:() => r.data && r.data.data}); }catch(e){} }; run(); watch(path, run); return () => {}; }
+      }),
+      collection: col => ({
+        onSnapshot: next => { const run = async () => { try{ const rows = await rowsOf(col); next({docs:rows.map(r => ({id:r.path.slice(col.length+1), data:() => r.data, exists:true}))}); }catch(e){} }; run(); watch(col+'/', run); return () => {}; }
+      })
+    };
+  }
+  const user = () => ({id:async () => uid, isOwner:async () => admin, canEdit:async () => admin});
+
+  /* ---- other players in the city ---- */
+  function joinHub(){
+    try{
+      chan = sb.channel('kd-hub', {config:{broadcast:{self:false}, presence:{key:uid}}});
+      chan.on('presence', {event:'sync'}, () => { count = Object.keys(chan.presenceState()).length; });
+      chan.on('broadcast', {event:'pos'}, m => onPos(m.payload));
+      chan.on('broadcast', {event:'say'}, m => onSay(m.payload));
+      chan.subscribe(st => { if(st === 'SUBSCRIBED') chan.track({t:Date.now()}); });
+    }catch(e){}
+  }
+  function bubble(model, text){
+    if(model.userData.bub){ model.remove(model.userData.bub); }
+    const b = makeLabel(text, 1, '#ffffff'); b.position.set(0,4.9,0); model.add(b); model.userData.bub = b;
+    clearTimeout(model.userData.bubT); model.userData.bubT = setTimeout(() => { if(model.userData.bub === b){ model.remove(b); model.userData.bub = null; } }, 4200);
+  }
+  function build(o){
+    const c = chOf(o.c), m = person(c ? c.kaftan : '#3A4AA0', c ? c.cap : '#F2D9A8', c ? c.skin : null);
+    m.position.set(o.x, 0, o.z); m.rotation.y = o.yaw || 0; const l = makeLabel((o.name||'Player').slice(0,16)+(c ? '  |  '+c.n : ''), .8); l.position.set(0,3.8,0); m.add(l);
+    HUB.sc.add(m); o.m = m;
+  }
+  function onPos(p){
+    if(!p || !p.id || p.id === uid || typeof p.x !== 'number' || typeof p.z !== 'number') return;
+    let o = others.get(p.id); if(!o){ if(others.size >= 24) return; o = {id:p.id, m:null}; others.set(p.id, o); }
+    o.x = clamp(p.x,-20,200); o.z = clamp(p.z,-20,150); o.yaw = Number(p.yaw)||0; o.name = String(p.n||'Player'); o.c = p.c; o.seen = now();
+    if(!o.m) build(o);
+  }
+  function onSay(p){ const o = p && others.get(p.id); const t = p && PHRASES[p.i|0]; if(o && o.m && t) bubble(o.m, t); }
+  function say(i){
+    const t = PHRASES[i]; if(!t) return; if(typeof PM !== 'undefined' && PM) bubble(PM, t);
+    if(ready && chan) try{ chan.send({type:'broadcast', event:'say', payload:{id:uid, i}}); }catch(e){}
+  }
+  function tick(dt){
+    if(!ready) return;
+    if(mode === 'hub' && chan){
+      sendT += dt; const k = Math.round(P.x*4)+'|'+Math.round(P.z*4)+'|'+Math.round(P.yaw*8);
+      if(sendT > .25 && (k !== lastSent || sendT > 1.5)){ sendT = 0; lastSent = k; try{ chan.send({type:'broadcast', event:'pos', payload:{id:uid, x:+P.x.toFixed(2), z:+P.z.toFixed(2), yaw:+P.yaw.toFixed(2), n:S.name, c:S.char}}); }catch(e){} }
+    }
+    const t = now();
+    for(const [id,o] of others){
+      if(t - o.seen > 9000){ if(o.m){ HUB.sc.remove(o.m); } others.delete(id); continue; }
+      if(!o.m) continue; const m = o.m, dx = o.x - m.position.x, dz = o.z - m.position.z, moving = Math.hypot(dx,dz) > .06, f = Math.min(1, dt*8);
+      m.position.x += dx*f; m.position.z += dz*f; let dy = o.yaw - m.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); m.rotation.y += dy*f;
+      animPerson(m, t/110, moving ? 1 : 0); m.visible = mode === 'hub' || mode === 'splash';
+    }
+  }
+  return {init, sync, report, board, unguwas, login, logout, db, user, say, tick,
+    get ready(){ return ready; }, get admin(){ return admin; }, get uid(){ return uid; }, get count(){ return Math.max(count, ready ? 1 : 0); }};
 })();
 
 function buildHub(){
@@ -1137,7 +1250,7 @@ function endMini(game, score){
   setTimeout(() => {
     const r = pay(game, score), best = score > S.best[game];
     if(best){ S.best[game] = score; S.mutunci += 1; }
-    S.energy -= 8; S.hunger -= 6; S.mood += 4; needs(); save(); mode = 'result'; Music.setMode('hub'); showResult(game, score, r, best);
+    S.energy -= 8; S.hunger -= 6; S.mood += 4; needs(); save(); Online.report(game, score); mode = 'result'; Music.setMode('hub'); showResult(game, score, r, best);
   }, 700);
 }
 function startMini(game){
@@ -1404,6 +1517,12 @@ function openFood(){
     FOOD.map(f => '<div class="item"><div><b>'+f.n+'</b><span class="muted">'+(f.h?'Hunger +'+f.h+'  ':'')+(f.e?'Energy +'+f.e+'  ':'')+'Mood +'+f.m+'</span></div><button class="btn" data-act="eat" data-id="'+f.id+'">'+fmt(f.p)+'</button></div>').join('')+
     '<div class="btnrow"><button class="btn alt" data-act="close">Done</button></div>','food');
 }
+function openChat(){
+  openSheet('<h2>Say something</h2><p class="muted">'+(Online.ready ? 'Players nearby see it above your head.' : 'Offline: only you will see it.')+'</p><div class="chips" style="margin:10px 0">'+PHRASES.map((t,i) => '<button class="chip" data-act="say" data-i="'+i+'">'+esc(t)+'</button>').join('')+'</div><div class="btnrow"><button class="btn alt" data-act="close">Close</button></div>','chat');
+}
+function openAdminLogin(){
+  openSheet('<h2>Admin sign in</h2><p class="muted">For the game owner only. This unlocks the Ads panel.</p><label class="lbl">Email</label><input type="email" id="aEm" autocomplete="username" style="width:100%"><label class="lbl">Password</label><input type="password" id="aPw" autocomplete="current-password" style="width:100%"><p class="muted" id="aErr" style="color:var(--bad)"></p><div class="btnrow"><button class="btn gold" data-act="alogin">Sign in</button><button class="btn alt" data-act="close">Cancel</button></div>','alogin');
+}
 let quizQ = null;
 function openQuiz(){
   if(S.quizDay !== todayKey()){ S.quizDay = todayKey(); S.quizCount = 0; }
@@ -1413,12 +1532,23 @@ function openQuiz(){
   openSheet('<h2>Kaduna Museum</h2><p class="muted">Question '+(S.quizCount+1)+' of 3 today. Right answer: +'+fmt(300)+' and Mutunci.</p><p><b>'+quizQ.q+'</b></p>'+
     order.map(i => '<button class="opt" data-act="qa" data-i="'+i+'">'+quizQ.o[i]+'</button>').join('')+'<div class="btnrow" id="qnext"></div>','quiz');
 }
+function renderBoard(game, rows, un){
+  const tabs = '<div class="chips" style="margin:10px 0">'+Object.keys(GAME_NAME).map(k => '<button class="chip'+(k===game?' on':'')+'" data-act="board" data-g="'+k+'">'+GAME_NAME[k]+'</button>').join('')+'</div>';
+  let body;
+  if(rows === null) body = '<p class="muted">Loading the live board...</p>';
+  else {
+    body = rows.length ? '<table class="tbl">'+rows.map((r,i) => '<tr class="'+(r.user_id===Online.uid?'me':'')+'"><td>'+(i+1)+'</td><td>'+esc(r.name)+' <span class="muted">'+esc(r.unguwa)+'</span></td><td>'+r.best+'</td></tr>').join('')+'</table>' : '<p class="muted">No scores yet. Play a round and be the first on the board.</p>';
+    if(un && un.length) body += '<h3 class="sh">Unguwa vs Unguwa</h3><table class="tbl">'+un.map((u,i) => '<tr><td>'+(i+1)+'</td><td>'+esc(u.unguwa)+'</td><td>'+u.total+' pts, '+u.players+' player'+(u.players===1?'':'s')+'</td></tr>').join('')+'</table>';
+  }
+  openSheet('<h2>Leaderboard</h2>'+tabs+body+'<div class="btnrow"><button class="btn alt" data-act="close">Close</button></div>','board');
+}
 function openBoard(game){
   game = game || 'keke';
+  if(Online.ready){ renderBoard(game, null, null); Promise.all([Online.board(game), Online.unguwas()]).then(r => { if(sheetOpen && sheetCtx === 'board') renderBoard(game, r[0], r[1]); }); return; }
   const rows = SAMPLE[game].map(r => ({n:r[0], s:r[1], sample:true})).concat([{n:S.name, s:S.best[game], me:true}]).sort((a,b) => b.s-a.s);
   openSheet('<h2>Leaderboard</h2><div class="chips" style="margin:10px 0">'+Object.keys(GAME_NAME).map(k => '<button class="chip'+(k===game?' on':'')+'" data-act="board" data-g="'+k+'">'+GAME_NAME[k]+'</button>').join('')+'</div>'+
     '<table class="tbl">'+rows.map((r,i) => '<tr class="'+(r.me?'me':'')+'"><td>'+(i+1)+'</td><td>'+esc(r.n)+(r.sample?'<span class="tag">sample</span>':'')+'</td><td>'+r.s+'</td></tr>').join('')+'</table>'+
-    '<p class="muted">Sample rivals fill the board for now. Live boards by Unguwa arrive with the online version.</p><div class="btnrow"><button class="btn alt" data-act="close">Close</button></div>','board');
+    '<p class="muted">Sample rivals fill the board while the game is offline.</p><div class="btnrow"><button class="btn alt" data-act="close">Close</button></div>','board');
 }
 function openLingo(){
   openSheet('<h2>Learn Hausa</h2><p class="muted">Greet the people of Kada City. Native-speaker review is pending for every line, so tell us if something is off.</p>'+
@@ -1433,6 +1563,7 @@ function openMe(){
     '<table class="tbl"><tr><td>Character</td><td>'+(CH() ? esc(CH().n)+' (rank '+rankOf(S.char)+')' : 'None yet')+'</td></tr><tr><td>Wallet</td><td>'+fmt(S.money)+'</td></tr><tr><td>Total earned</td><td>'+fmt(S.totalEarned)+'</td></tr><tr><td>Mutunci</td><td>'+S.mutunci+' / 100</td></tr><tr><td>Zinariya</td><td>0 (arrives with the shop)</td></tr></table>'+
     '<label class="lbl">Earned today (daily cap per game)</label><table class="tbl">'+earned+'</table>'+
     '<div class="btnrow"><button class="btn gold" data-act="copy" data-t="'+esc(invite)+'">Invite friends on WhatsApp</button></div>'+
+    (Online.ready ? '<p class="muted">Online: connected, '+Online.count+' player'+(Online.count===1?'':'s')+' in the city.</p><div class="btnrow"><button class="btn alt" data-act="'+(Online.admin ? 'alogout' : 'aform')+'">'+(Online.admin ? 'Sign out admin' : 'Admin sign in')+'</button></div>' : '<p class="muted">Offline mode: your progress saves on this device only.</p>')+
     '<div class="btnrow"><button class="btn alt" data-act="close">Close</button><button class="btn alt" data-act="reset">Reset progress</button></div>','me');
 }
 
@@ -1463,7 +1594,7 @@ function startGame(){
     setTimeout(() => toast('Sannu streak day '+S.streak+'. +'+fmt(bonus), 3600), 700);
   }
   PM.remove && HUB.sc.remove(PM); PM = person(S.kaftan, S.cap, (CH()||{}).skin); HUB.sc.add(PM); setPlayerLabel(); P.x = 90; P.z = 79; P.yaw = Math.PI;
-  mode = 'hub'; Music.setMode('hub'); $('#hud').hidden = false; $('#dock').hidden = false; save();
+  mode = 'hub'; Music.setMode('hub'); $('#hud').hidden = false; $('#dock').hidden = false; save(); Online.sync();
 }
 
 /* =====================================================================
@@ -1502,7 +1633,7 @@ function grantChar(id){
   S.roster[id] = {sk:Object.assign({pace:0,flavour:0,touch:0,hustle:0}, c.start)}; return true;
 }
 function applyChar(id){
-  const c = chOf(id); grantChar(id); S.char = id; S.kaftan = c.kaftan; S.cap = c.cap; save();
+  const c = chOf(id); grantChar(id); S.char = id; S.kaftan = c.kaftan; S.cap = c.cap; save(); Online.sync();
   try{ rebuildPlayer(); }catch(e){}
 }
 function charCard(c, extra){
@@ -1638,6 +1769,10 @@ function act(a, d, el){
       save(); break; }
     case 'quiz': openQuiz(); break;
     case 'mtab': openMarket(d.t); break;
+    case 'say': Online.say(Number(d.i)); closeSheet(); break;
+    case 'aform': openAdminLogin(); break;
+    case 'alogin': { const em = ($('#aEm').value||'').trim(), pw = $('#aPw').value||''; $('#aErr').textContent = 'Signing in...'; Online.login(em, pw).then(() => { location.reload(); }).catch(e => { $('#aErr').textContent = 'Could not sign in: '+((e && e.message) || 'check your details'); }); break; }
+    case 'alogout': Online.logout().then(() => location.reload()); break;
     case 'gbuy': { const g = GOODS.find(x => x.id === d.id), have = invOf(g.id).n, k = Math.min(Number(d.n)||1, INV_MAX-have);
       if(k <= 0){ toast('Your stall is full for this item.'); break; } const tot = buyPrice(g)*k; if(S.money < tot){ toast('Not enough ₦.'); break; }
       S.money -= tot; const e = S.inv[g.id] = S.inv[g.id] || {n:0,cost:0}; e.n += k; e.cost += tot; sfx.buy(); save(); openMarket(); break; }
@@ -1680,7 +1815,7 @@ addEventListener('blur', () => { for(const k in keys) keys[k] = false; joy = nul
 $('#act').addEventListener('click', doAction);
 $('#dock').addEventListener('click', e => {
   const b = e.target.closest('[data-d]'); if(!b || mode !== 'hub') return; sfx.tap();
-  if(b.dataset.d === 'board') openBoard(); else if(b.dataset.d === 'lingo') openLingo(); else if(b.dataset.d === 'me') openMe(); else if(b.dataset.d === 'ads') AdminUI.open(); else if(b.dataset.d === 'hero') openHero();
+  if(b.dataset.d === 'board') openBoard(); else if(b.dataset.d === 'lingo') openLingo(); else if(b.dataset.d === 'me') openMe(); else if(b.dataset.d === 'ads') AdminUI.open(); else if(b.dataset.d === 'hero') openHero(); else if(b.dataset.d === 'chat') openChat();
   else { soundOn = !soundOn; b.textContent = soundOn ? 'Sound on' : 'Sound off'; Music.setOn(soundOn); if(!soundOn) Engine.stop(); }
 });
 
@@ -1689,7 +1824,7 @@ function bar(id, v){ const el = $(id); el.style.width = clamp(v,0,100)+'%'; el.c
 let hudAcc = 0;
 function updateHud(dt){
   hudAcc += dt; if(hudAcc < .25) return; hudAcc = 0;
-  $('#hName').textContent = S.name; $('#hSub').textContent = S.unguwa+' | '+SEASON+' | '+clockStr();
+  $('#hName').textContent = S.name; $('#hSub').textContent = S.unguwa+' | '+SEASON+' | '+clockStr()+(Online.ready ? ' | '+Online.count+' online' : '');
   $('#hMoney').textContent = fmt(S.money); $('#hLvl').textContent = 'Level '+level();
   bar('#bE',S.energy); bar('#bH',S.hunger); bar('#bM',S.mood); bar('#bR',S.mutunci);
   const a = $('#act');
@@ -1717,7 +1852,7 @@ function frame(now){
   ovBegin();
   if(mode === 'splash' || mode === 'hub'){
     if(mode === 'hub' && !sheetOpen && !adminOpen) updateHub(dt);
-    Ads.update(dt, hubCam, Ads.hubList(), mode === 'hub' && !adminOpen);
+    Ads.update(dt, hubCam, Ads.hubList(), mode === 'hub' && !adminOpen); Online.tick(dt);
     updateWorld(dt, now); placeHubCam(dt, now); updateArrow(now);
     renderer.render(HUB.sc, hubCam);
     if(mode === 'hub'){ drawJoy(); drawWeather(); if(outage > 0){ octx.fillStyle = 'rgba(5,4,18,.35)'; octx.fillRect(0,0,W,H); } updateHud(dt); }
@@ -1733,7 +1868,7 @@ showSplash(false);
 requestAnimationFrame(frame);
 unlock(); Music.start('title');
 try{ const hintEl = $('#hint'), chk = () => { if(hintEl) hintEl.hidden = !!(AC && AC.state === 'running'); }; if(AC) AC.onstatechange = chk; chk(); }catch(e){}
-Ads.connect();
+Online.init().then(() => { Ads.connect(); const bA = $('#bAds'); if(bA) bA.hidden = !Online.admin; });
 addEventListener('pagehide', () => Ads.flush()); document.addEventListener('visibilitychange', () => { if(document.hidden) Ads.flush(); });
 })();
 </script>

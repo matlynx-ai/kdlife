@@ -266,7 +266,7 @@ canvas[data-th]{position:static!important;inset:auto!important;display:block;max
       <div class="need"><b>Mood</b><div class="bar"><i id="bM"></i></div></div>
       <div class="need"><b>Mutunci</b><div class="bar"><i id="bR"></i></div></div>
     </div>
-    <div class="hchips"><span class="hc" id="hOn"><i class="dot"></i><span id="hOnT">Offline</span></span><button class="hc" id="hRadio" data-d="radio">Radio</button><span class="hc" id="hPlace">Kada City</span></div>
+    <div class="hchips"><span class="hc" id="hOn"><i class="dot"></i><span id="hOnT">Offline</span></span><button class="hc" id="hRadio" data-d="radio">Radio</button><button class="hc" id="hMute" aria-label="Mute or unmute">🔊</button><button class="hc" id="hWx" aria-label="Change weather">☀</button><span class="hc" id="hPlace">Kada City</span></div>
   </div>
   <div id="toasts"></div>
   <div class="mg" id="mg" hidden></div>
@@ -507,8 +507,11 @@ const achList = () => ACH.filter(a => { try{ return a.f(S); }catch(e){ return fa
 const hourNow = () => { const d = new Date(); return d.getHours() + d.getMinutes()/60; };
 const nightA = () => { const h = hourNow(); if(h>=19||h<5) return .42; if(h>=17) return (h-17)/2*.42; if(h<7) return (7-h)/2*.42; return 0; };
 const season = () => { const m = new Date().getMonth(); if(m>=10||m<=1) return 'Harmattan'; if(m<=4) return 'Hot season'; return 'Rainy season'; };
-const SEASON = season();
-const RAINY = SEASON === 'Rainy season';
+let SEASON = season();
+let RAINY = SEASON === 'Rainy season';
+let WEATHER = 'auto', TIMESET = 'auto';
+function setWeather(w){ WEATHER = w; SEASON = w === 'clear' ? 'Hot season' : w === 'rain' ? 'Rainy season' : w === 'haze' ? 'Harmattan' : season(); RAINY = SEASON === 'Rainy season'; try{ localStorage.setItem('kdlife.wx',w); }catch(e){} if(typeof Env !== 'undefined' && Env.setN) Env.setN(Env.n); if(typeof Music !== 'undefined' && Music.refresh) Music.refresh(); }
+function setTime(t){ TIMESET = t; FORCE_NIGHT = t === 'day' ? 0 : t === 'night' ? 1 : null; try{ localStorage.setItem('kdlife.tm',t); }catch(e){} }
 const clockStr = () => { const d = new Date(); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); };
 let FORCE_NIGHT = null;   // debug: 0..1
 
@@ -786,7 +789,7 @@ const Music = (() => {
   function crowd(){ if(!AC||!ready||!soundOn) return; nz(AC.currentTime,1.4,'bandpass',900,.6,.35,AC.destination); }
   function fill(){ if(!AC||!ready||!soundOn) return; const t = AC.currentTime; [0,.09,.18,.27].forEach((d,i) => tom(t+d,[294,247,220,196][i],1)); kick(t+.36,1); clap(t+.36,1); nz(t,.5,'highpass',5000,1,.2); }
   document.addEventListener('visibilitychange', () => { if(!ready) return; if(document.hidden) master.gain.setTargetAtTime(0, AC.currentTime, .05); else applyVol(); });
-  return {init, start, setMode, setOn, setStation, stations:stationList, nz:(t,d,ty,f,q,g,de) => { if(ready) nz(t,d,ty,f,q,g,de); }, crowd, fill, get cur(){ return cur; }, get mode(){ return ctxMode; }};
+  return {init, start, setMode, setOn, refresh:() => applyVol(), setStation, stations:stationList, nz:(t,d,ty,f,q,g,de) => { if(ready) nz(t,d,ty,f,q,g,de); }, crowd, fill, get cur(){ return cur; }, get mode(){ return ctxMode; }};
 })();
 const gesture = () => unlock();
 for(const ev of ['pointerdown','pointerup','click','keydown','touchstart','touchend']) addEventListener(ev, gesture, true);
@@ -1877,7 +1880,7 @@ const Env = (() => {
   };
   const mix3 = (A,B,k,out) => out.copy(A).lerp(B,k);
   E.setN = (n, dusk) => {
-    E.n = n; const d = dusk || 0;
+    E.n = n; const d = dusk || 0; E.hz = SEASON === 'Harmattan' ? 1 : RAINY ? .5 : 0;
     const set = (key) => { const a = SKY.day[key], b = SKY.dusk[key], c = SKY.night[key]; tmp[key].copy(a).lerp(b,d).lerp(c,n); return tmp[key]; };
     for(const k in tmp) set(k);
     const sk = E.sky.geometry, p = sk.attributes.position, c = sk.attributes.color;
@@ -2597,7 +2600,7 @@ function rebuildCar(){
 }
 function placeParked(){ if(!pCar || PL.mode === 'drive') return; pCar.position.set(S.carPos.x,0,S.carPos.z); pCar.rotation.y = S.carPos.hd; }
 const carDef = () => carOf(S.car);
-function setCamBehind(){ PL.cam.yaw = PL.hd+Math.PI; }
+function setCamBehind(){ PL.cam.yaw = PL.hd; }
 function teleport(x,z,hd){ PL.x = x; PL.z = z; PL.hd = hd === undefined ? PL.hd : hd; PL.v = 0; onBridge = null; setCamBehind(); }
 function toggleDrive(){
   if(PL.mode === 'walk'){
@@ -2615,7 +2618,7 @@ function updPlayer(dt){
     let mx = IN.x*-cy_*-1 + IN.y*sy, mz = IN.x*sy*1 + IN.y*cy_;   // right = (-cos,sin)->(x*... ) see below
     mx = IN.y*sy + IN.x*(-cy_); mz = IN.y*cy_ + IN.x*sy;
     const mag = Math.min(1,Math.hypot(IN.x,IN.y));
-    const speed = (IN.sprint ? 11 : 7.2)*mag*(S.energy < 15 ? .6 : 1);
+    const speed = (IN.sprint ? 17 : 11.5)*mag*(S.energy < 15 ? .6 : 1);
     if(mag > .08){ const th = Math.atan2(mx,mz); PL.hd = turn(PL.hd,th,Math.min(1,dt*14)); PL.v = lerp(PL.v,speed,Math.min(1,dt*10)); } else PL.v = lerp(PL.v,0,Math.min(1,dt*12));
     let nx = PL.x+Math.sin(PL.hd)*PL.v*dt, nz = PL.z+Math.cos(PL.hd)*PL.v*dt;
     const b = bridgeStep(nx,nz,.6); nx = b[0]; nz = b[1];
@@ -2625,7 +2628,7 @@ function updPlayer(dt){
     // sidewalks sit a hair above the road
     PL.stride += dt*PL.v*.5; pAv.position.set(PL.x,PL.y,PL.z); pAv.rotation.y = PL.hd; animPerson(pAv,PL.stride*5.2,clamp(PL.v/6,0,1));
     // auto-align camera behind when moving forward
-    if(mag > .08 && !IN.drag){ const d = angDiff(cam.yaw,PL.hd+Math.PI); cam.yaw += d*Math.min(1,dt*(IN.y > .2 ? 1.6 : .5)); }
+    if(mag > .08 && !IN.drag){ const d = angDiff(cam.yaw,PL.hd); cam.yaw += d*Math.min(1,dt*(IN.y > .2 ? 1.6 : .5)); }
     cam.dist = lerp(cam.dist,onBridge ? 9 : 12,Math.min(1,dt*3));
   } else {
     const def = carDef(); const top = def.spd*.9;
@@ -2644,7 +2647,7 @@ function updPlayer(dt){
     S.stats.distance += Math.hypot(nx-PL.x,nz-PL.z); PL.x = clamp(nx,-30,WX+30); PL.z = clamp(nz,-30,WZ-6); PL.y = 0;
     pCar.position.set(PL.x,0,PL.z); pCar.rotation.y = PL.hd; pCar.rotation.z = -PL.steer*Math.min(1,Math.abs(PL.v)/top)*.04;
     Engine.set && Engine.set(Math.abs(PL.v)/top,throttle > .1);
-    if(!IN.drag){ const d = angDiff(cam.yaw,PL.hd+Math.PI); cam.yaw += d*Math.min(1,dt*(2+Math.abs(PL.v)*.05)); }
+    if(!IN.drag){ const d = angDiff(cam.yaw,PL.hd); cam.yaw += d*Math.min(1,dt*(2+Math.abs(PL.v)*.05)); }
     cam.dist = lerp(cam.dist,12+Math.abs(PL.v)*.25,Math.min(1,dt*3));
   }
 }
@@ -3807,6 +3810,8 @@ function openSettings(){
   sheetHTML('<h2>Settings</h2><label class="lbl">Player name</label><div class="cform" style="padding:0"><input type="text" id="nmIn" maxlength="14" value="'+esc(S.name)+'"><button class="btn" data-act="rename">Save</button></div>'+
     '<label class="lbl">Graphics</label><div class="chips">'+gfx+'</div><p class="muted">Pick Light if the game feels slow. Reload after changing.</p>'+
     '<label class="lbl">Sound</label><div class="chips"><button class="chip'+(soundOn ? ' on' : '')+'" data-act="snd" data-v="1">Music and effects on</button><button class="chip'+(soundOn ? '' : ' on')+'" data-act="snd" data-v="0">Mute</button></div>'+
+    '<label class="lbl">Weather</label><div class="chips">'+[['auto','Auto'],['clear','Clear'],['rain','Rain'],['haze','Dusty haze']].map(w => '<button class="chip'+(WEATHER === w[0] ? ' on' : '')+'" data-act="wx" data-v="'+w[0]+'">'+w[1]+'</button>').join('')+'</div>'+
+    '<label class="lbl">Time of day</label><div class="chips">'+[['auto','Real clock'],['day','Always day'],['night','Always night']].map(w => '<button class="chip'+(TIMESET === w[0] ? ' on' : '')+'" data-act="tm" data-v="'+w[0]+'">'+w[1]+'</button>').join('')+'</div>'+
     '<label class="lbl">Owner sign-in</label><p class="muted">Only for the game owner, to manage billboards and payments.</p><input type="text" id="lgE" placeholder="Email" autocomplete="username" style="margin-bottom:8px"><input type="text" id="lgP" placeholder="Password" autocomplete="current-password" style="-webkit-text-security:disc"><div class="btnrow"><button class="btn alt" data-act="login">Sign in</button>'+(Online.admin ? '<button class="btn alt" data-act="logout">Sign out</button>' : '')+'</div>'+
     '<label class="lbl">Blocked players</label><p class="muted">'+((S.blocked||[]).length ? (S.blocked.length+' blocked. <button class="chip" data-act="unblockall">Unblock all</button>') : 'Nobody blocked.')+'</p>'+
     '<div class="btnrow"><button class="btn alt" data-act="newlife">Start a new life</button><button class="btn alt" data-act="me">Back</button></div>','set');
@@ -3914,6 +3919,8 @@ function act(a, d, el){
     case 'gfx': GFX = d.q; applyGfx(); resize(); toast('Graphics set. Reload the game to apply fully.'); openSettings(); break;
     case 'snd': { soundOn = d.v === '1'; try{ localStorage.setItem('kdlife.snd',soundOn ? '1' : '0'); }catch(e){} Music.setOn(soundOn); if(!soundOn) Engine.stop(); if(sheetCtx === 'radio') openRadio(); else openSettings(); break; }
     case 'login': { const e = ($('#lgE')||{}).value, p = ($('#lgP')||{}).value; if(!e || !p){ toast('Enter email and password.'); break; } Online.login(e.trim(),p).then(() => { toast('Signed in. Reloading...'); setTimeout(() => location.reload(),700); }).catch(() => toast('Sign-in failed. Check the details.')); break; }
+    case 'wx': setWeather(d.v); toast('Weather: '+d.v); openSettings(); break;
+    case 'tm': setTime(d.v); toast('Time of day: '+d.v); openSettings(); break;
     case 'logout': Online.logout().then(() => location.reload()); break;
     case 'newlife': if(confirm('Start a new life? This erases your progress on this device.')){ S = defaults(); save(); location.reload(); } break;
     case 'station': S.radio = d.id; Music.setStation(d.id); save(); if(d.keep) openClub(); else openRadio(); break;
@@ -3925,7 +3932,7 @@ function act(a, d, el){
 /* ---------- start flow ---------- */
 (function(){
   const splash = $('#splash'), hint = $('#hint'), enter = $('#enter'), panel = $('#panel'), coinsEl = $('#coins'), create = $('#create');
-  try{ if(localStorage.getItem('kdlife.snd') === '0') soundOn = false; }catch(e){}
+  try{ if(localStorage.getItem('kdlife.snd') === '0') soundOn = false; const wx = localStorage.getItem('kdlife.wx'), tm = localStorage.getItem('kdlife.tm'); if(wx && wx !== 'auto') setWeather(wx); if(tm && tm !== 'auto') setTime(tm); }catch(e){}
   for(let i=0;i<16;i++){ const c = document.createElement('div'); c.className = 'coin'; const s = 26+Math.random()*30; c.style.cssText = 'left:'+Math.random()*96+'%;width:'+s+'px;height:'+s+'px;font-size:'+s*.5+'px;animation:rise '+(7+Math.random()*7)+'s linear '+(-Math.random()*12)+'s infinite'; c.textContent = '₦'; coinsEl.appendChild(c); }
   let started = false;
   function kick(){ if(started) return; started = true; try{ unlock(); Music.start('title',S.radio); }catch(e){} hint.hidden = true; $('#wm').classList.add('live'); }
@@ -4212,7 +4219,7 @@ cv.addEventListener('pointerdown', e => {
 });
 cv.addEventListener('pointermove', e => {
   const p = pt(e);
-  if(look && look.id === e.pointerId && mode === 'hub'){ PL.cam.yaw -= (p.x-look.x)*.007; PL.cam.pitch = clamp(PL.cam.pitch+(p.y-look.y)*.004,.12,1.0); look.x = p.x; look.y = p.y; }
+  if(look && look.id === e.pointerId && mode === 'hub'){ PL.cam.yaw += (p.x-look.x)*.007; PL.cam.pitch = clamp(PL.cam.pitch+(p.y-look.y)*.004,.12,1.0); look.x = p.x; look.y = p.y; }
   if(mode === 'home' && HOME.pointer) HOME.pointer(p.x,p.y,'move',e);
   if(mode === 'mini' && mini && (mini.drag || mini.onMove)) miniPtr(p,'move',e);
 });
@@ -4234,6 +4241,11 @@ addEventListener('keyup', e => { const k = e.key.length === 1 ? e.key.toLowerCas
 addEventListener('blur', () => { for(const k in keys) keys[k] = false; JOY.on = false; JOY.x = JOY.y = 0; look = null; IN.drag = 0; });
 $('#act').addEventListener('click', () => { sfx.tap(); doAction(); });
 $('#drv').addEventListener('click', () => { sfx.tap(); if(PL.mode === 'drive') toggleDrive(); });
+const WXC = ['auto','clear','rain','haze'], WXI = {auto:'⛅',clear:'☀',rain:'🌧',haze:'🌫'};
+function syncHudBtns(){ $('#hMute').textContent = soundOn ? '🔊' : '🔇'; $('#hWx').textContent = WXI[WEATHER]; }
+$('#hMute').addEventListener('click', () => { soundOn = !soundOn; try{ localStorage.setItem('kdlife.snd',soundOn ? '1' : '0'); }catch(e){} Music.setOn(soundOn); if(!soundOn) Engine.stop(); sfx.tap(); syncHudBtns(); });
+$('#hWx').addEventListener('click', () => { setWeather(WXC[(WXC.indexOf(WEATHER)+1)%WXC.length]); toast('Weather: '+({auto:'follows the season',clear:'clear',rain:'rain',haze:'dusty haze'})[WEATHER]); syncHudBtns(); });
+setTimeout(syncHudBtns,50);
 $('#hRadio').addEventListener('click', () => { if(mode === 'hub' || mode === 'home'){ sfx.tap(); openRadio(); } });
 $('#bCash').addEventListener('click', () => { if(mode === 'hub' || mode === 'home'){ sfx.tap(); openCash(); } });
 $('#dock').addEventListener('click', e => { const b = e.target.closest('[data-d]'); if(!b || (mode !== 'hub' && mode !== 'home')) return; sfx.tap(); dockAct(b.dataset.d); });

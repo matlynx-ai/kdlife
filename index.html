@@ -305,6 +305,918 @@ canvas[data-th]{position:static!important;inset:auto!important;display:block;max
   <div id="fade"></div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>/* three.js r128 examples (MIT) */
+( function () {
+
+	class EffectComposer {
+
+		constructor( renderer, renderTarget ) {
+
+			this.renderer = renderer;
+
+			if ( renderTarget === undefined ) {
+
+				const parameters = {
+					minFilter: THREE.LinearFilter,
+					magFilter: THREE.LinearFilter,
+					format: THREE.RGBAFormat
+				};
+				const size = renderer.getSize( new THREE.Vector2() );
+				this._pixelRatio = renderer.getPixelRatio();
+				this._width = size.width;
+				this._height = size.height;
+				renderTarget = new THREE.WebGLRenderTarget( this._width * this._pixelRatio, this._height * this._pixelRatio, parameters );
+				renderTarget.texture.name = 'EffectComposer.rt1';
+
+			} else {
+
+				this._pixelRatio = 1;
+				this._width = renderTarget.width;
+				this._height = renderTarget.height;
+
+			}
+
+			this.renderTarget1 = renderTarget;
+			this.renderTarget2 = renderTarget.clone();
+			this.renderTarget2.texture.name = 'EffectComposer.rt2';
+			this.writeBuffer = this.renderTarget1;
+			this.readBuffer = this.renderTarget2;
+			this.renderToScreen = true;
+			this.passes = []; // dependencies
+
+			if ( THREE.CopyShader === undefined ) {
+
+				console.error( 'THREE.EffectComposer relies on THREE.CopyShader' );
+
+			}
+
+			if ( THREE.ShaderPass === undefined ) {
+
+				console.error( 'THREE.EffectComposer relies on THREE.ShaderPass' );
+
+			}
+
+			this.copyPass = new THREE.ShaderPass( THREE.CopyShader );
+			this.clock = new THREE.Clock();
+
+		}
+
+		swapBuffers() {
+
+			const tmp = this.readBuffer;
+			this.readBuffer = this.writeBuffer;
+			this.writeBuffer = tmp;
+
+		}
+
+		addPass( pass ) {
+
+			this.passes.push( pass );
+			pass.setSize( this._width * this._pixelRatio, this._height * this._pixelRatio );
+
+		}
+
+		insertPass( pass, index ) {
+
+			this.passes.splice( index, 0, pass );
+			pass.setSize( this._width * this._pixelRatio, this._height * this._pixelRatio );
+
+		}
+
+		removePass( pass ) {
+
+			const index = this.passes.indexOf( pass );
+
+			if ( index !== - 1 ) {
+
+				this.passes.splice( index, 1 );
+
+			}
+
+		}
+
+		isLastEnabledPass( passIndex ) {
+
+			for ( let i = passIndex + 1; i < this.passes.length; i ++ ) {
+
+				if ( this.passes[ i ].enabled ) {
+
+					return false;
+
+				}
+
+			}
+
+			return true;
+
+		}
+
+		render( deltaTime ) {
+
+			// deltaTime value is in seconds
+			if ( deltaTime === undefined ) {
+
+				deltaTime = this.clock.getDelta();
+
+			}
+
+			const currentRenderTarget = this.renderer.getRenderTarget();
+			let maskActive = false;
+
+			for ( let i = 0, il = this.passes.length; i < il; i ++ ) {
+
+				const pass = this.passes[ i ];
+				if ( pass.enabled === false ) continue;
+				pass.renderToScreen = this.renderToScreen && this.isLastEnabledPass( i );
+				pass.render( this.renderer, this.writeBuffer, this.readBuffer, deltaTime, maskActive );
+
+				if ( pass.needsSwap ) {
+
+					if ( maskActive ) {
+
+						const context = this.renderer.getContext();
+						const stencil = this.renderer.state.buffers.stencil; //context.stencilFunc( context.NOTEQUAL, 1, 0xffffffff );
+
+						stencil.setFunc( context.NOTEQUAL, 1, 0xffffffff );
+						this.copyPass.render( this.renderer, this.writeBuffer, this.readBuffer, deltaTime ); //context.stencilFunc( context.EQUAL, 1, 0xffffffff );
+
+						stencil.setFunc( context.EQUAL, 1, 0xffffffff );
+
+					}
+
+					this.swapBuffers();
+
+				}
+
+				if ( THREE.MaskPass !== undefined ) {
+
+					if ( pass instanceof THREE.MaskPass ) {
+
+						maskActive = true;
+
+					} else if ( pass instanceof THREE.ClearMaskPass ) {
+
+						maskActive = false;
+
+					}
+
+				}
+
+			}
+
+			this.renderer.setRenderTarget( currentRenderTarget );
+
+		}
+
+		reset( renderTarget ) {
+
+			if ( renderTarget === undefined ) {
+
+				const size = this.renderer.getSize( new THREE.Vector2() );
+				this._pixelRatio = this.renderer.getPixelRatio();
+				this._width = size.width;
+				this._height = size.height;
+				renderTarget = this.renderTarget1.clone();
+				renderTarget.setSize( this._width * this._pixelRatio, this._height * this._pixelRatio );
+
+			}
+
+			this.renderTarget1.dispose();
+			this.renderTarget2.dispose();
+			this.renderTarget1 = renderTarget;
+			this.renderTarget2 = renderTarget.clone();
+			this.writeBuffer = this.renderTarget1;
+			this.readBuffer = this.renderTarget2;
+
+		}
+
+		setSize( width, height ) {
+
+			this._width = width;
+			this._height = height;
+			const effectiveWidth = this._width * this._pixelRatio;
+			const effectiveHeight = this._height * this._pixelRatio;
+			this.renderTarget1.setSize( effectiveWidth, effectiveHeight );
+			this.renderTarget2.setSize( effectiveWidth, effectiveHeight );
+
+			for ( let i = 0; i < this.passes.length; i ++ ) {
+
+				this.passes[ i ].setSize( effectiveWidth, effectiveHeight );
+
+			}
+
+		}
+
+		setPixelRatio( pixelRatio ) {
+
+			this._pixelRatio = pixelRatio;
+			this.setSize( this._width, this._height );
+
+		}
+
+	}
+
+	class Pass {
+
+		constructor() {
+
+			// if set to true, the pass is processed by the composer
+			this.enabled = true; // if set to true, the pass indicates to swap read and write buffer after rendering
+
+			this.needsSwap = true; // if set to true, the pass clears its buffer before rendering
+
+			this.clear = false; // if set to true, the result of the pass is rendered to screen. This is set automatically by EffectComposer.
+
+			this.renderToScreen = false;
+
+		}
+
+		setSize( ) {}
+
+		render( ) {
+
+			console.error( 'THREE.Pass: .render() must be implemented in derived pass.' );
+
+		}
+
+	} // Helper for passes that need to fill the viewport with a single quad.
+
+
+	const _camera = new THREE.OrthographicCamera( - 1, 1, 1, - 1, 0, 1 ); // https://github.com/mrdoob/three.js/pull/21358
+
+
+	const _geometry = new THREE.BufferGeometry();
+
+	_geometry.setAttribute( 'position', new THREE.Float32BufferAttribute( [ - 1, 3, 0, - 1, - 1, 0, 3, - 1, 0 ], 3 ) );
+
+	_geometry.setAttribute( 'uv', new THREE.Float32BufferAttribute( [ 0, 2, 0, 0, 2, 0 ], 2 ) );
+
+	class FullScreenQuad {
+
+		constructor( material ) {
+
+			this._mesh = new THREE.Mesh( _geometry, material );
+
+		}
+
+		dispose() {
+
+			this._mesh.geometry.dispose();
+
+		}
+
+		render( renderer ) {
+
+			renderer.render( this._mesh, _camera );
+
+		}
+
+		get material() {
+
+			return this._mesh.material;
+
+		}
+
+		set material( value ) {
+
+			this._mesh.material = value;
+
+		}
+
+	}
+
+	THREE.EffectComposer = EffectComposer;
+	THREE.FullScreenQuad = FullScreenQuad;
+	THREE.Pass = Pass;
+
+} )();
+/* three.js r128 examples (MIT) */
+( function () {
+
+	class RenderPass extends THREE.Pass {
+
+		constructor( scene, camera, overrideMaterial, clearColor, clearAlpha ) {
+
+			super();
+			this.scene = scene;
+			this.camera = camera;
+			this.overrideMaterial = overrideMaterial;
+			this.clearColor = clearColor;
+			this.clearAlpha = clearAlpha !== undefined ? clearAlpha : 0;
+			this.clear = true;
+			this.clearDepth = false;
+			this.needsSwap = false;
+			this._oldClearColor = new THREE.Color();
+
+		}
+
+		render( renderer, writeBuffer, readBuffer
+			/*, deltaTime, maskActive */
+		) {
+
+			const oldAutoClear = renderer.autoClear;
+			renderer.autoClear = false;
+			let oldClearAlpha, oldOverrideMaterial;
+
+			if ( this.overrideMaterial !== undefined ) {
+
+				oldOverrideMaterial = this.scene.overrideMaterial;
+				this.scene.overrideMaterial = this.overrideMaterial;
+
+			}
+
+			if ( this.clearColor ) {
+
+				renderer.getClearColor( this._oldClearColor );
+				oldClearAlpha = renderer.getClearAlpha();
+				renderer.setClearColor( this.clearColor, this.clearAlpha );
+
+			}
+
+			if ( this.clearDepth ) {
+
+				renderer.clearDepth();
+
+			}
+
+			renderer.setRenderTarget( this.renderToScreen ? null : readBuffer ); // TODO: Avoid using autoClear properties, see https://github.com/mrdoob/three.js/pull/15571#issuecomment-465669600
+
+			if ( this.clear ) renderer.clear( renderer.autoClearColor, renderer.autoClearDepth, renderer.autoClearStencil );
+			renderer.render( this.scene, this.camera );
+
+			if ( this.clearColor ) {
+
+				renderer.setClearColor( this._oldClearColor, oldClearAlpha );
+
+			}
+
+			if ( this.overrideMaterial !== undefined ) {
+
+				this.scene.overrideMaterial = oldOverrideMaterial;
+
+			}
+
+			renderer.autoClear = oldAutoClear;
+
+		}
+
+	}
+
+	THREE.RenderPass = RenderPass;
+
+} )();
+/* three.js r128 examples (MIT) */
+( function () {
+
+	class ShaderPass extends THREE.Pass {
+
+		constructor( shader, textureID ) {
+
+			super();
+			this.textureID = textureID !== undefined ? textureID : 'tDiffuse';
+
+			if ( shader instanceof THREE.ShaderMaterial ) {
+
+				this.uniforms = shader.uniforms;
+				this.material = shader;
+
+			} else if ( shader ) {
+
+				this.uniforms = THREE.UniformsUtils.clone( shader.uniforms );
+				this.material = new THREE.ShaderMaterial( {
+					defines: Object.assign( {}, shader.defines ),
+					uniforms: this.uniforms,
+					vertexShader: shader.vertexShader,
+					fragmentShader: shader.fragmentShader
+				} );
+
+			}
+
+			this.fsQuad = new THREE.FullScreenQuad( this.material );
+
+		}
+
+		render( renderer, writeBuffer, readBuffer
+			/*, deltaTime, maskActive */
+		) {
+
+			if ( this.uniforms[ this.textureID ] ) {
+
+				this.uniforms[ this.textureID ].value = readBuffer.texture;
+
+			}
+
+			this.fsQuad.material = this.material;
+
+			if ( this.renderToScreen ) {
+
+				renderer.setRenderTarget( null );
+				this.fsQuad.render( renderer );
+
+			} else {
+
+				renderer.setRenderTarget( writeBuffer ); // TODO: Avoid using autoClear properties, see https://github.com/mrdoob/three.js/pull/15571#issuecomment-465669600
+
+				if ( this.clear ) renderer.clear( renderer.autoClearColor, renderer.autoClearDepth, renderer.autoClearStencil );
+				this.fsQuad.render( renderer );
+
+			}
+
+		}
+
+	}
+
+	THREE.ShaderPass = ShaderPass;
+
+} )();
+/* three.js r128 examples (MIT) */
+( function () {
+
+	/**
+ * Full-screen textured quad shader
+ */
+	var CopyShader = {
+		uniforms: {
+			'tDiffuse': {
+				value: null
+			},
+			'opacity': {
+				value: 1.0
+			}
+		},
+		vertexShader:
+  /* glsl */
+  `
+
+		varying vec2 vUv;
+
+		void main() {
+
+			vUv = uv;
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+		}`,
+		fragmentShader:
+  /* glsl */
+  `
+
+		uniform float opacity;
+
+		uniform sampler2D tDiffuse;
+
+		varying vec2 vUv;
+
+		void main() {
+
+			vec4 texel = texture2D( tDiffuse, vUv );
+			gl_FragColor = opacity * texel;
+
+		}`
+	};
+
+	THREE.CopyShader = CopyShader;
+
+} )();
+/* three.js r128 examples (MIT) */
+( function () {
+
+	/**
+ * Luminosity
+ * http://en.wikipedia.org/wiki/Luminosity
+ */
+
+	const LuminosityHighPassShader = {
+		shaderID: 'luminosityHighPass',
+		uniforms: {
+			'tDiffuse': {
+				value: null
+			},
+			'luminosityThreshold': {
+				value: 1.0
+			},
+			'smoothWidth': {
+				value: 1.0
+			},
+			'defaultColor': {
+				value: new THREE.Color( 0x000000 )
+			},
+			'defaultOpacity': {
+				value: 0.0
+			}
+		},
+		vertexShader:
+  /* glsl */
+  `
+
+		varying vec2 vUv;
+
+		void main() {
+
+			vUv = uv;
+
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+		}`,
+		fragmentShader:
+  /* glsl */
+  `
+
+		uniform sampler2D tDiffuse;
+		uniform vec3 defaultColor;
+		uniform float defaultOpacity;
+		uniform float luminosityThreshold;
+		uniform float smoothWidth;
+
+		varying vec2 vUv;
+
+		void main() {
+
+			vec4 texel = texture2D( tDiffuse, vUv );
+
+			vec3 luma = vec3( 0.299, 0.587, 0.114 );
+
+			float v = dot( texel.xyz, luma );
+
+			vec4 outputColor = vec4( defaultColor.rgb, defaultOpacity );
+
+			float alpha = smoothstep( luminosityThreshold, luminosityThreshold + smoothWidth, v );
+
+			gl_FragColor = mix( outputColor, texel, alpha );
+
+		}`
+	};
+
+	THREE.LuminosityHighPassShader = LuminosityHighPassShader;
+
+} )();
+/* three.js r128 examples (MIT) */
+( function () {
+
+	/**
+ * UnrealBloomPass is inspired by the bloom pass of Unreal Engine. It creates a
+ * mip map chain of bloom textures and blurs them with different radii. Because
+ * of the weighted combination of mips, and because larger blurs are done on
+ * higher mips, this effect provides good quality and performance.
+ *
+ * Reference:
+ * - https://docs.unrealengine.com/latest/INT/Engine/Rendering/PostProcessEffects/Bloom/
+ */
+
+	class UnrealBloomPass extends THREE.Pass {
+
+		constructor( resolution, strength, radius, threshold ) {
+
+			super();
+			this.strength = strength !== undefined ? strength : 1;
+			this.radius = radius;
+			this.threshold = threshold;
+			this.resolution = resolution !== undefined ? new THREE.Vector2( resolution.x, resolution.y ) : new THREE.Vector2( 256, 256 ); // create color only once here, reuse it later inside the render function
+
+			this.clearColor = new THREE.Color( 0, 0, 0 ); // render targets
+
+			const pars = {
+				minFilter: THREE.LinearFilter,
+				magFilter: THREE.LinearFilter,
+				format: THREE.RGBAFormat
+			};
+			this.renderTargetsHorizontal = [];
+			this.renderTargetsVertical = [];
+			this.nMips = 5;
+			let resx = Math.round( this.resolution.x / 2 );
+			let resy = Math.round( this.resolution.y / 2 );
+			this.renderTargetBright = new THREE.WebGLRenderTarget( resx, resy, pars );
+			this.renderTargetBright.texture.name = 'UnrealBloomPass.bright';
+			this.renderTargetBright.texture.generateMipmaps = false;
+
+			for ( let i = 0; i < this.nMips; i ++ ) {
+
+				const renderTargetHorizonal = new THREE.WebGLRenderTarget( resx, resy, pars );
+				renderTargetHorizonal.texture.name = 'UnrealBloomPass.h' + i;
+				renderTargetHorizonal.texture.generateMipmaps = false;
+				this.renderTargetsHorizontal.push( renderTargetHorizonal );
+				const renderTargetVertical = new THREE.WebGLRenderTarget( resx, resy, pars );
+				renderTargetVertical.texture.name = 'UnrealBloomPass.v' + i;
+				renderTargetVertical.texture.generateMipmaps = false;
+				this.renderTargetsVertical.push( renderTargetVertical );
+				resx = Math.round( resx / 2 );
+				resy = Math.round( resy / 2 );
+
+			} // luminosity high pass material
+
+
+			if ( THREE.LuminosityHighPassShader === undefined ) console.error( 'THREE.UnrealBloomPass relies on THREE.LuminosityHighPassShader' );
+			const highPassShader = THREE.LuminosityHighPassShader;
+			this.highPassUniforms = THREE.UniformsUtils.clone( highPassShader.uniforms );
+			this.highPassUniforms[ 'luminosityThreshold' ].value = threshold;
+			this.highPassUniforms[ 'smoothWidth' ].value = 0.01;
+			this.materialHighPassFilter = new THREE.ShaderMaterial( {
+				uniforms: this.highPassUniforms,
+				vertexShader: highPassShader.vertexShader,
+				fragmentShader: highPassShader.fragmentShader,
+				defines: {}
+			} ); // Gaussian Blur Materials
+
+			this.separableBlurMaterials = [];
+			const kernelSizeArray = [ 3, 5, 7, 9, 11 ];
+			resx = Math.round( this.resolution.x / 2 );
+			resy = Math.round( this.resolution.y / 2 );
+
+			for ( let i = 0; i < this.nMips; i ++ ) {
+
+				this.separableBlurMaterials.push( this.getSeperableBlurMaterial( kernelSizeArray[ i ] ) );
+				this.separableBlurMaterials[ i ].uniforms[ 'texSize' ].value = new THREE.Vector2( resx, resy );
+				resx = Math.round( resx / 2 );
+				resy = Math.round( resy / 2 );
+
+			} // Composite material
+
+
+			this.compositeMaterial = this.getCompositeMaterial( this.nMips );
+			this.compositeMaterial.uniforms[ 'blurTexture1' ].value = this.renderTargetsVertical[ 0 ].texture;
+			this.compositeMaterial.uniforms[ 'blurTexture2' ].value = this.renderTargetsVertical[ 1 ].texture;
+			this.compositeMaterial.uniforms[ 'blurTexture3' ].value = this.renderTargetsVertical[ 2 ].texture;
+			this.compositeMaterial.uniforms[ 'blurTexture4' ].value = this.renderTargetsVertical[ 3 ].texture;
+			this.compositeMaterial.uniforms[ 'blurTexture5' ].value = this.renderTargetsVertical[ 4 ].texture;
+			this.compositeMaterial.uniforms[ 'bloomStrength' ].value = strength;
+			this.compositeMaterial.uniforms[ 'bloomRadius' ].value = 0.1;
+			this.compositeMaterial.needsUpdate = true;
+			const bloomFactors = [ 1.0, 0.8, 0.6, 0.4, 0.2 ];
+			this.compositeMaterial.uniforms[ 'bloomFactors' ].value = bloomFactors;
+			this.bloomTintColors = [ new THREE.Vector3( 1, 1, 1 ), new THREE.Vector3( 1, 1, 1 ), new THREE.Vector3( 1, 1, 1 ), new THREE.Vector3( 1, 1, 1 ), new THREE.Vector3( 1, 1, 1 ) ];
+			this.compositeMaterial.uniforms[ 'bloomTintColors' ].value = this.bloomTintColors; // copy material
+
+			if ( THREE.CopyShader === undefined ) {
+
+				console.error( 'THREE.UnrealBloomPass relies on THREE.CopyShader' );
+
+			}
+
+			const copyShader = THREE.CopyShader;
+			this.copyUniforms = THREE.UniformsUtils.clone( copyShader.uniforms );
+			this.copyUniforms[ 'opacity' ].value = 1.0;
+			this.materialCopy = new THREE.ShaderMaterial( {
+				uniforms: this.copyUniforms,
+				vertexShader: copyShader.vertexShader,
+				fragmentShader: copyShader.fragmentShader,
+				blending: THREE.AdditiveBlending,
+				depthTest: false,
+				depthWrite: false,
+				transparent: true
+			} );
+			this.enabled = true;
+			this.needsSwap = false;
+			this._oldClearColor = new THREE.Color();
+			this.oldClearAlpha = 1;
+			this.basic = new THREE.MeshBasicMaterial();
+			this.fsQuad = new THREE.FullScreenQuad( null );
+
+		}
+
+		dispose() {
+
+			for ( let i = 0; i < this.renderTargetsHorizontal.length; i ++ ) {
+
+				this.renderTargetsHorizontal[ i ].dispose();
+
+			}
+
+			for ( let i = 0; i < this.renderTargetsVertical.length; i ++ ) {
+
+				this.renderTargetsVertical[ i ].dispose();
+
+			}
+
+			this.renderTargetBright.dispose();
+
+		}
+
+		setSize( width, height ) {
+
+			let resx = Math.round( width / 2 );
+			let resy = Math.round( height / 2 );
+			this.renderTargetBright.setSize( resx, resy );
+
+			for ( let i = 0; i < this.nMips; i ++ ) {
+
+				this.renderTargetsHorizontal[ i ].setSize( resx, resy );
+				this.renderTargetsVertical[ i ].setSize( resx, resy );
+				this.separableBlurMaterials[ i ].uniforms[ 'texSize' ].value = new THREE.Vector2( resx, resy );
+				resx = Math.round( resx / 2 );
+				resy = Math.round( resy / 2 );
+
+			}
+
+		}
+
+		render( renderer, writeBuffer, readBuffer, deltaTime, maskActive ) {
+
+			renderer.getClearColor( this._oldClearColor );
+			this.oldClearAlpha = renderer.getClearAlpha();
+			const oldAutoClear = renderer.autoClear;
+			renderer.autoClear = false;
+			renderer.setClearColor( this.clearColor, 0 );
+			if ( maskActive ) renderer.state.buffers.stencil.setTest( false ); // Render input to screen
+
+			if ( this.renderToScreen ) {
+
+				this.fsQuad.material = this.basic;
+				this.basic.map = readBuffer.texture;
+				renderer.setRenderTarget( null );
+				renderer.clear();
+				this.fsQuad.render( renderer );
+
+			} // 1. Extract Bright Areas
+
+
+			this.highPassUniforms[ 'tDiffuse' ].value = readBuffer.texture;
+			this.highPassUniforms[ 'luminosityThreshold' ].value = this.threshold;
+			this.fsQuad.material = this.materialHighPassFilter;
+			renderer.setRenderTarget( this.renderTargetBright );
+			renderer.clear();
+			this.fsQuad.render( renderer ); // 2. Blur All the mips progressively
+
+			let inputRenderTarget = this.renderTargetBright;
+
+			for ( let i = 0; i < this.nMips; i ++ ) {
+
+				this.fsQuad.material = this.separableBlurMaterials[ i ];
+				this.separableBlurMaterials[ i ].uniforms[ 'colorTexture' ].value = inputRenderTarget.texture;
+				this.separableBlurMaterials[ i ].uniforms[ 'direction' ].value = UnrealBloomPass.BlurDirectionX;
+				renderer.setRenderTarget( this.renderTargetsHorizontal[ i ] );
+				renderer.clear();
+				this.fsQuad.render( renderer );
+				this.separableBlurMaterials[ i ].uniforms[ 'colorTexture' ].value = this.renderTargetsHorizontal[ i ].texture;
+				this.separableBlurMaterials[ i ].uniforms[ 'direction' ].value = UnrealBloomPass.BlurDirectionY;
+				renderer.setRenderTarget( this.renderTargetsVertical[ i ] );
+				renderer.clear();
+				this.fsQuad.render( renderer );
+				inputRenderTarget = this.renderTargetsVertical[ i ];
+
+			} // Composite All the mips
+
+
+			this.fsQuad.material = this.compositeMaterial;
+			this.compositeMaterial.uniforms[ 'bloomStrength' ].value = this.strength;
+			this.compositeMaterial.uniforms[ 'bloomRadius' ].value = this.radius;
+			this.compositeMaterial.uniforms[ 'bloomTintColors' ].value = this.bloomTintColors;
+			renderer.setRenderTarget( this.renderTargetsHorizontal[ 0 ] );
+			renderer.clear();
+			this.fsQuad.render( renderer ); // Blend it additively over the input texture
+
+			this.fsQuad.material = this.materialCopy;
+			this.copyUniforms[ 'tDiffuse' ].value = this.renderTargetsHorizontal[ 0 ].texture;
+			if ( maskActive ) renderer.state.buffers.stencil.setTest( true );
+
+			if ( this.renderToScreen ) {
+
+				renderer.setRenderTarget( null );
+				this.fsQuad.render( renderer );
+
+			} else {
+
+				renderer.setRenderTarget( readBuffer );
+				this.fsQuad.render( renderer );
+
+			} // Restore renderer settings
+
+
+			renderer.setClearColor( this._oldClearColor, this.oldClearAlpha );
+			renderer.autoClear = oldAutoClear;
+
+		}
+
+		getSeperableBlurMaterial( kernelRadius ) {
+
+			return new THREE.ShaderMaterial( {
+				defines: {
+					'KERNEL_RADIUS': kernelRadius,
+					'SIGMA': kernelRadius
+				},
+				uniforms: {
+					'colorTexture': {
+						value: null
+					},
+					'texSize': {
+						value: new THREE.Vector2( 0.5, 0.5 )
+					},
+					'direction': {
+						value: new THREE.Vector2( 0.5, 0.5 )
+					}
+				},
+				vertexShader: `varying vec2 vUv;
+				void main() {
+					vUv = uv;
+					gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+				}`,
+				fragmentShader: `#include <common>
+				varying vec2 vUv;
+				uniform sampler2D colorTexture;
+				uniform vec2 texSize;
+				uniform vec2 direction;
+
+				float gaussianPdf(in float x, in float sigma) {
+					return 0.39894 * exp( -0.5 * x * x/( sigma * sigma))/sigma;
+				}
+				void main() {
+					vec2 invSize = 1.0 / texSize;
+					float fSigma = float(SIGMA);
+					float weightSum = gaussianPdf(0.0, fSigma);
+					vec3 diffuseSum = texture2D( colorTexture, vUv).rgb * weightSum;
+					for( int i = 1; i < KERNEL_RADIUS; i ++ ) {
+						float x = float(i);
+						float w = gaussianPdf(x, fSigma);
+						vec2 uvOffset = direction * invSize * x;
+						vec3 sample1 = texture2D( colorTexture, vUv + uvOffset).rgb;
+						vec3 sample2 = texture2D( colorTexture, vUv - uvOffset).rgb;
+						diffuseSum += (sample1 + sample2) * w;
+						weightSum += 2.0 * w;
+					}
+					gl_FragColor = vec4(diffuseSum/weightSum, 1.0);
+				}`
+			} );
+
+		}
+
+		getCompositeMaterial( nMips ) {
+
+			return new THREE.ShaderMaterial( {
+				defines: {
+					'NUM_MIPS': nMips
+				},
+				uniforms: {
+					'blurTexture1': {
+						value: null
+					},
+					'blurTexture2': {
+						value: null
+					},
+					'blurTexture3': {
+						value: null
+					},
+					'blurTexture4': {
+						value: null
+					},
+					'blurTexture5': {
+						value: null
+					},
+					'dirtTexture': {
+						value: null
+					},
+					'bloomStrength': {
+						value: 1.0
+					},
+					'bloomFactors': {
+						value: null
+					},
+					'bloomTintColors': {
+						value: null
+					},
+					'bloomRadius': {
+						value: 0.0
+					}
+				},
+				vertexShader: `varying vec2 vUv;
+				void main() {
+					vUv = uv;
+					gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+				}`,
+				fragmentShader: `varying vec2 vUv;
+				uniform sampler2D blurTexture1;
+				uniform sampler2D blurTexture2;
+				uniform sampler2D blurTexture3;
+				uniform sampler2D blurTexture4;
+				uniform sampler2D blurTexture5;
+				uniform sampler2D dirtTexture;
+				uniform float bloomStrength;
+				uniform float bloomRadius;
+				uniform float bloomFactors[NUM_MIPS];
+				uniform vec3 bloomTintColors[NUM_MIPS];
+
+				float lerpBloomFactor(const in float factor) {
+					float mirrorFactor = 1.2 - factor;
+					return mix(factor, mirrorFactor, bloomRadius);
+				}
+
+				void main() {
+					gl_FragColor = bloomStrength * ( lerpBloomFactor(bloomFactors[0]) * vec4(bloomTintColors[0], 1.0) * texture2D(blurTexture1, vUv) +
+						lerpBloomFactor(bloomFactors[1]) * vec4(bloomTintColors[1], 1.0) * texture2D(blurTexture2, vUv) +
+						lerpBloomFactor(bloomFactors[2]) * vec4(bloomTintColors[2], 1.0) * texture2D(blurTexture3, vUv) +
+						lerpBloomFactor(bloomFactors[3]) * vec4(bloomTintColors[3], 1.0) * texture2D(blurTexture4, vUv) +
+						lerpBloomFactor(bloomFactors[4]) * vec4(bloomTintColors[4], 1.0) * texture2D(blurTexture5, vUv) );
+				}`
+			} );
+
+		}
+
+	}
+
+	UnrealBloomPass.BlurDirectionX = new THREE.Vector2( 1.0, 0.0 );
+	UnrealBloomPass.BlurDirectionY = new THREE.Vector2( 0.0, 1.0 );
+
+	THREE.UnrealBloomPass = UnrealBloomPass;
+
+} )();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.58.0/dist/umd/supabase.min.js"></script>
 <script src="config.js"></script>
 <script>(function(){'use strict';
@@ -332,11 +1244,11 @@ if(!window.THREE){ $('#splash').innerHTML = '<div class="center"><h2>KD Life nee
 
 /* ---------- renderer ---------- */
 const cv = $('#gl'), ov = $('#ov'), octx = ov.getContext('2d');
-let W = 1, H = 1, DPR = 1, renderer;
+let W = 1, H = 1, DPR = 1, renderer, postResize = null;
 const COARSE = (() => { try{ return matchMedia('(pointer:coarse)').matches; }catch(e){ return false; } })();
 try{ renderer = new THREE.WebGLRenderer({canvas:cv, antialias:true, powerPreference:'high-performance'}); }
 catch(e){ $('#splash').innerHTML = '<div class="center"><h2>3D is not available</h2><p class="muted">Your browser could not start WebGL. Try Chrome or Safari, and update your browser.</p></div>'; return; }
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
 let GFX = 'high';
 try{ GFX = localStorage.getItem('kdlife.gfx') || (COARSE ? 'med' : 'high'); }catch(e){}
 function applyGfx(){
@@ -351,6 +1263,7 @@ function resize(){
   W = Math.max(1, r.width); H = Math.max(1, r.height);
   renderer.setPixelRatio(DPR); renderer.setSize(W, H, false);
   ov.width = Math.round(W*DPR); ov.height = Math.round(H*DPR);
+  if(postResize) postResize();
 }
 addEventListener('resize', resize); resize();
 function fitCam(cam){ const a = W/H; if(cam.aspect !== a){ cam.aspect = a; cam.fov = a < 1 ? 70 : 52; cam.updateProjectionMatrix(); } }
@@ -361,7 +1274,7 @@ const dkey = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'
 const todayKey = () => dkey(new Date());
 const defaults = () => ({v:2,name:'Dan Kaduna',unguwa:'Tudun Wada',money:5000,energy:80,hunger:70,mood:70,mutunci:10,xp:0,
   streak:0,lastLogin:'',earnedToday:{},best:{keke:0,suya:0,kwallo:0,polo:0,snooker:0,whot:0},
-  look:{skin:'#8A5A3B',outfit:'o_kaftan_in',cap:'c_hula_sand',acc:[]},
+  look:{skin:'#8A5A3B',outfit:'o_kaftan_in',cap:'c_hula_sand',acc:[],body:'m',hair:'h_crop'},
   ownOutfit:['o_kaftan_in'], ownCap:['c_hula_sand','c_none'], ownAcc:[],
   cars:['keke'], car:'keke', carCol:{}, carPos:null,
   home:{tier:1, wall:'#E9D9B8', floor:'tile', items:[], bag:[]},
@@ -417,27 +1330,46 @@ const SKINS = ['#D9A27A','#C68B59','#A06B48','#8A5A3B','#6B4630','#4E3220','#3A2
 
 /* outfits: style decides the 3D model; tier decides price band and "style" points */
 const OUTFITS = [
+  // g = who it is shown to in shops: m, f or u (everyone)
   // starter set (free choice at the start)
-  {id:'o_kaftan_in', n:'Indigo kaftan',      tier:1,p:0,     st:'kaftan', c:'#3A4AA0',t:'#F2D9A8',pa:'#2b2118'},
-  {id:'o_kaftan_lat',n:'Laterite kaftan',    tier:1,p:0,     st:'kaftan', c:'#D2492C',t:'#F2D9A8',pa:'#2b2118'},
-  {id:'o_kaftan_gr', n:'Croc-green kaftan',  tier:1,p:0,     st:'kaftan', c:'#3E9A63',t:'#F7EEDC',pa:'#2b2118'},
-  {id:'o_tee',       n:'Street tee and jeans',tier:1,p:0,    st:'tee',    c:'#E8A33C',t:'#fff',   pa:'#2f4a73'},
-  {id:'o_jersey',    n:'Kada FC jersey',     tier:1,p:0,     st:'jersey', c:'#2E7D4F',t:'#F7EEDC',pa:'#15112B'},
-  {id:'o_ankara1',   n:'Ankara shirt',       tier:1,p:0,     st:'ankara', c:'#C4442B',t:'#F0BC3E',pa:'#2b2118'},
+  {id:'o_kaftan_in', n:'Indigo kaftan',      tier:1,p:0,     g:'u', top:{k:'kaftan',c:'#3A4AA0',t:'#F2D9A8'}, bot:{k:'trousers',c:'#2b2118'}, sh:{k:'sandal',c:'#5a3a22'}},
+  {id:'o_kaftan_lat',n:'Laterite kaftan',    tier:1,p:0,     g:'u', top:{k:'kaftan',c:'#D2492C',t:'#F2D9A8'}, bot:{k:'trousers',c:'#2b2118'}, sh:{k:'sandal',c:'#5a3a22'}},
+  {id:'o_kaftan_gr', n:'Croc-green kaftan',  tier:1,p:0,     g:'u', top:{k:'kaftan',c:'#3E9A63',t:'#F7EEDC'}, bot:{k:'trousers',c:'#2b2118'}, sh:{k:'sandal',c:'#5a3a22'}},
+  {id:'o_tee',       n:'Street tee and jeans',tier:1,p:0,    g:'u', top:{k:'tee',c:'#E8A33C',t:'#ffffff'}, bot:{k:'jeans',c:'#2f4a73'}, sh:{k:'sneaker',c:'#f2f2f2'}},
+  {id:'o_jersey',    n:'Kada FC jersey',     tier:1,p:0,     g:'u', top:{k:'jersey',c:'#2E7D4F',t:'#F7EEDC'}, bot:{k:'shorts',c:'#15112B'}, sh:{k:'sneaker',c:'#f2f2f2'}},
+  {id:'o_ankara1',   n:'Ankara shirt',       tier:1,p:0,     g:'m', top:{k:'ankara',c:'#C4442B',t:'#F0BC3E'}, bot:{k:'trousers',c:'#2b2118'}, sh:{k:'shoe',c:'#3a2417'}},
+  {id:'o_polo',      n:'Polo and chinos',    tier:1,p:0,     g:'m', top:{k:'polo',c:'#2B6C8F',t:'#F4F1EA'}, bot:{k:'trousers',c:'#C8B18A'}, sh:{k:'shoe',c:'#3a2417'}},
+  {id:'o_sundress',  n:'Yellow sundress',    tier:1,p:0,     g:'f', top:{k:'dress',c:'#F0BC3E',t:'#ffffff'}, bot:{k:'none',c:'#000'}, sh:{k:'sandal',c:'#f4efe6'}, hem:.8},
+  {id:'o_crop_j',    n:'Crop top and jeans', tier:1,p:0,     g:'f', top:{k:'crop',c:'#F4F1EA',t:'#D2492C'}, bot:{k:'jeans',c:'#3b5b86'}, sh:{k:'sneaker',c:'#f2f2f2'}},
   // tier 2
-  {id:'o_riga_w',    n:'White babban riga',  tier:2,p:12000, st:'riga',   c:'#F4F0E6',t:'#C9B89A',pa:'#F4F0E6'},
-  {id:'o_ankara2',   n:'Ankara two-piece',   tier:2,p:15000, st:'ankara', c:'#3A4AA0',t:'#FFD76A',pa:'#3A4AA0'},
-  {id:'o_hoodie',    n:'Hoodie and cargos',  tier:2,p:18000, st:'hoodie', c:'#6A6F7C',t:'#fff',   pa:'#3a3a46'},
-  {id:'o_kaftan_pl', n:'Plum kaftan',        tier:2,p:20000, st:'kaftan', c:'#7A3A8E',t:'#F2D9A8',pa:'#2b2118'},
+  {id:'o_riga_w',    n:'White babban riga',  tier:2,p:12000, g:'u', top:{k:'robe',c:'#F4F0E6',t:'#C9B89A'}, bot:{k:'none',c:'#000'}, sh:{k:'sandal',c:'#5a3a22'}},
+  {id:'o_ankara2',   n:'Ankara two-piece',   tier:2,p:15000, g:'u', top:{k:'ankara',c:'#3A4AA0',t:'#FFD76A'}, bot:{k:'trousers',c:'#3A4AA0'}, sh:{k:'shoe',c:'#3a2417'}},
+  {id:'o_hoodie',    n:'Hoodie and cargos',  tier:2,p:18000, g:'u', top:{k:'hoodie',c:'#6A6F7C',t:'#ffffff'}, bot:{k:'cargo',c:'#3a3a46'}, sh:{k:'sneaker',c:'#f2f2f2'}},
+  {id:'o_kaftan_pl', n:'Plum kaftan',        tier:2,p:20000, g:'u', top:{k:'kaftan',c:'#7A3A8E',t:'#F2D9A8'}, bot:{k:'trousers',c:'#2b2118'}, sh:{k:'sandal',c:'#5a3a22'}},
+  {id:'o_denim',     n:'Denim jacket and jeans',tier:2,p:14000,g:'u',top:{k:'jacket',c:'#4a6f9c',t:'#c9a55a',i:'#F4F1EA'}, bot:{k:'jeans',c:'#2d4468'}, sh:{k:'sneaker',c:'#d8d2c4'}},
+  {id:'o_track',     n:'Tracksuit',          tier:2,p:16000, g:'u', top:{k:'jacket',c:'#1E8A5A',t:'#ffffff',i:'#ffffff'}, bot:{k:'joggers',c:'#1E8A5A'}, sh:{k:'sneaker',c:'#f2f2f2'}},
+  {id:'o_tee_sh',    n:'Tee and shorts',     tier:2,p:9000,  g:'m', top:{k:'tee',c:'#C4442B',t:'#fff'}, bot:{k:'shorts',c:'#C8B18A'}, sh:{k:'sneaker',c:'#f2f2f2'}},
+  {id:'o_blouse',    n:'Blouse and midi skirt',tier:2,p:19000,g:'f',top:{k:'long',c:'#F4F1EA',t:'#D2492C'}, bot:{k:'skirt',c:'#7A3A8E',p:'pleat'}, sh:{k:'shoe',c:'#3a2417'}},
+  {id:'o_wrap',      n:'Ankara wrap dress',  tier:2,p:22000, g:'f', top:{k:'dress',c:'#C4442B',t:'#F0BC3E',p:'ankara'}, bot:{k:'none',c:'#000'}, sh:{k:'sandal',c:'#5a3a22'}, hem:.78},
   // tier 3
-  {id:'o_riga_g',    n:'Gold-trim babban riga',tier:3,p:60000,st:'riga', c:'#F7F2E4',t:'#E2B33C',pa:'#F7F2E4'},
-  {id:'o_suit_n',    n:'Navy suit',          tier:3,p:90000, st:'suit',   c:'#1D2A52',t:'#D2492C',pa:'#1D2A52'},
-  {id:'o_jersey2',   n:'Pro club jersey',    tier:3,p:70000, st:'jersey', c:'#D2492C',t:'#F0BC3E',pa:'#15112B'},
+  {id:'o_riga_g',    n:'Gold-trim babban riga',tier:3,p:60000,g:'u',top:{k:'robe',c:'#F7F2E4',t:'#E2B33C'}, bot:{k:'none',c:'#000'}, sh:{k:'shoe',c:'#3a2417'}},
+  {id:'o_suit_n',    n:'Navy suit',          tier:3,p:90000, g:'u', top:{k:'blazer',c:'#1D2A52',t:'#D2492C'}, bot:{k:'trousers',c:'#1D2A52'}, sh:{k:'shoe',c:'#101018'}},
+  {id:'o_jersey2',   n:'Pro club jersey',    tier:3,p:70000, g:'u', top:{k:'jersey',c:'#D2492C',t:'#F0BC3E'}, bot:{k:'shorts',c:'#15112B'}, sh:{k:'sneaker',c:'#15112B'}},
+  {id:'o_leather',   n:'Leather jacket and black jeans',tier:3,p:65000,g:'u',top:{k:'jacket',c:'#1c1a1f',t:'#9aa0aa',i:'#d9d9d9'}, bot:{k:'jeans',c:'#17171d'}, sh:{k:'boot',c:'#201814'}},
+  {id:'o_blazer_j',  n:'Blazer and jeans',   tier:3,p:55000, g:'u', top:{k:'blazer',c:'#8A6A44',t:'#2b2118'}, bot:{k:'jeans',c:'#3b5b86'}, sh:{k:'shoe',c:'#3a2417'}},
+  {id:'o_varsity',   n:'Varsity jacket',     tier:3,p:48000, g:'u', top:{k:'jacket',c:'#2C2560',t:'#F0BC3E',i:'#F4F1EA',vs:'#F4F1EA'}, bot:{k:'jeans',c:'#2d4468'}, sh:{k:'sneaker',c:'#f2f2f2'}},
+  {id:'o_gown',      n:'Satin evening gown', tier:3,p:85000, g:'f', top:{k:'dress',c:'#7A1F3D',t:'#F0BC3E'}, bot:{k:'none',c:'#000'}, sh:{k:'shoe',c:'#F0BC3E'}, hem:.2, flareBoost:.05},
+  {id:'o_kaftan_e',  n:'Embroidered kaftan set',tier:3,p:75000,g:'u',top:{k:'kaftan',c:'#F4F0E6',t:'#C8963A'}, bot:{k:'trousers',c:'#F4F0E6'}, sh:{k:'shoe',c:'#3a2417'}},
   // tier 4
-  {id:'o_suit_b',    n:'Black tuxedo',       tier:4,p:300000,st:'suit',   c:'#101018',t:'#F0BC3E',pa:'#101018'},
-  {id:'o_riga_r',    n:'Royal sarki robe',   tier:4,p:600000,st:'royal',  c:'#2C2560',t:'#FFD76A',pa:'#2C2560'},
-  {id:'o_gold',      n:'Gold streetwear',    tier:4,p:900000,st:'hoodie', c:'#F0BC3E',t:'#15112B',pa:'#15112B'}
+  {id:'o_suit_b',    n:'Black tuxedo',       tier:4,p:300000,g:'u', top:{k:'blazer',c:'#101018',t:'#F0BC3E'}, bot:{k:'trousers',c:'#101018'}, sh:{k:'shoe',c:'#0a0a0a'}},
+  {id:'o_riga_r',    n:'Royal sarki robe',   tier:4,p:600000,g:'u', top:{k:'robe',c:'#2C2560',t:'#FFD76A'}, bot:{k:'none',c:'#000'}, sh:{k:'shoe',c:'#F0BC3E'}, cape:'#7A3A8E'},
+  {id:'o_gold',      n:'Gold streetwear',    tier:4,p:900000,g:'u', top:{k:'hoodie',c:'#F0BC3E',t:'#15112B'}, bot:{k:'joggers',c:'#15112B'}, sh:{k:'sneaker',c:'#F0BC3E'}},
+  {id:'o_coat',      n:'Designer long coat', tier:4,p:420000,g:'u', top:{k:'jacket',c:'#3a3530',t:'#C8963A',i:'#F4F1EA'}, bot:{k:'trousers',c:'#15112B'}, sh:{k:'boot',c:'#201814'}},
+  {id:'o_sequin',    n:'Sequin party dress', tier:4,p:380000,g:'f', top:{k:'dress',c:'#C8963A',t:'#FFE9A8'}, bot:{k:'none',c:'#000'}, sh:{k:'shoe',c:'#15112B'}, hem:1.0, neck:2.1},
+  {id:'o_tux_w',     n:'White dinner jacket',tier:4,p:520000,g:'m', top:{k:'blazer',c:'#F4F1EA',t:'#101018'}, bot:{k:'trousers',c:'#101018'}, sh:{k:'shoe',c:'#0a0a0a'}},
+  {id:'o_puffer',    n:'Puffer and chains',  tier:4,p:700000,g:'u', top:{k:'puffer',c:'#E8E2D4',t:'#F0BC3E'}, bot:{k:'joggers',c:'#1c1a1f'}, sh:{k:'sneaker',c:'#F0BC3E'}}
 ];
+const outfitsFor = (body) => OUTFITS.filter(o => o.g === 'u' || o.g === (body === 'f' ? 'f' : 'm'));
 const CAPS = [
   {id:'c_none',     n:'Bare head',  p:0,    st:'none',  c:'#15110e',sc:0},
   {id:'c_hula_sand',n:'Sand hula cap',p:0,  st:'hula',  c:'#F2D9A8',sc:1},
@@ -982,84 +1914,6 @@ function buildMats(){
 buildMats();
 
 /* ---------- avatar ---------- */
-const avGeo = {};
-function avatarParts(look){
-  const key = [look.skin,look.outfit,look.cap,(look.acc||[]).join(',')].join('|');
-  if(avGeo[key]) return avGeo[key];
-  const o = oOf(look.outfit), cp = cOf(look.cap), skin = look.skin, dark = shade(skin,-.25), acc = look.acc || [];
-  const st = o.st, c = o.c, t = o.t, pa = o.pa;
-  const body = new Batch(), aL = new Batch(), aR = new Batch(), lL = new Batch(), lR = new Batch();
-  const longRobe = st === 'riga' || st === 'royal';
-  const kaf = st === 'kaftan';
-  // legs (pivot at hip y=1.15)
-  const legCol = longRobe ? c : pa;
-  for(const [b,x] of [[lL,-.26],[lR,.26]]){
-    if(st === 'jersey'){ b.box(0,-.2,0,.38,.7,.4,pa,0,0,0,1); b.box(0,-.75,0,.34,.5,.34,skin,0,0,0,1); b.box(0,-.62,0,.37,.18,.37,t,0,0,0,1); }
-    else if(!longRobe) b.box(0,-.5,0,.36,1.0,.38,legCol,0,0,0,1);
-    else b.box(0,-.6,0,.34,.8,.34,pa,0,0,0,1);
-    const shoe = st === 'suit' ? '#101018' : st === 'tee' || st === 'hoodie' || st === 'jersey' ? '#f4f4f4' : '#4a2f1d';
-    b.box(0,-1.07,.1,.4,.18,.62,shoe,0,0,0,1); if(st === 'tee' || st === 'hoodie' || st === 'jersey') b.box(0,-1.14,.1,.42,.06,.64,'#c33',0,0,0,1);
-  }
-  // torso
-  const torsoH = 1.05; body.box(0,1.68,0,.98,torsoH,.58,c,0,0,0,.9);
-  if(kaf){ body.box(0,1.08,0,1.0,.85,.62,c,0,0,0,.8); body.box(0,.66,0,1.02,.06,.64,t,0,0,0,1); body.box(0,2.12,.3,.5,.1,.04,t,0,0,0,1); body.box(0,1.75,.3,.05,.7,.04,t,0,0,0,1); }
-  if(longRobe){ body.box(0,.85,0,1.12,1.5,.7,c,0,0,0,.8); body.box(0,.17,0,1.14,.08,.72,t,0,0,0,1); body.box(0,1.95,.3,.7,.14,.04,t,0,0,0,1); body.box(0,1.45,.3,.06,.9,.04,t,0,0,0,1); if(st === 'riga') body.box(0,1.75,.3,.5,.3,.04,t,0,0,0,1); }
-  if(st === 'royal'){ body.box(0,1.25,-.38,1.2,2.0,.1,'#7A3A8E',0,0,0,.9); body.box(0,.25,-.38,1.22,.1,.12,t,0,0,0,1); body.box(0,2.2,.28,.9,.16,.06,t,0,0,0,1); }
-  if(st === 'tee'){ body.box(0,2.18,.28,.4,.06,.06,'#fff',0,0,0,1); }
-  if(st === 'jersey'){ body.box(0,2.2,.28,.5,.1,.05,t,0,0,0,1); body.box(0,1.68,.3,.98,.1,.03,t,0,0,0,1); }
-  if(st === 'ankara'){ for(let i=0;i<10;i++){ const px = ((i*37)%7-3)*.13, py = 1.3+((i*53)%6)*.14; body.box(px,py,.3,.14,.14,.03,t,i*.7,0,0,1); body.box(-px*.8,py+.08,-.3,.14,.14,.03,t,i*.5,0,0,1); } body.box(0,2.18,.28,.4,.06,.06,t,0,0,0,1); }
-  if(st === 'hoodie'){ body.box(0,1.68,0,1.04,torsoH+.05,.64,c,0,0,0,.9); body.box(0,1.4,.34,.7,.3,.06,shade(c,-.15),0,0,0,1); body.ball(0,2.2,-.3,.38,.3,.3,c); body.box(-.15,2.05,.33,.04,.4,.04,t,0,0,0,1); body.box(.15,2.05,.33,.04,.4,.04,t,0,0,0,1); }
-  if(st === 'suit'){ body.box(0,1.7,.01,1.02,1.08,.6,c,0,0,0,.9); body.box(0,1.85,.31,.3,.8,.02,'#f4f4f4',0,0,0,1); body.box(0,1.75,.33,.1,.65,.03,t,0,0,0,1); body.box(0,1.12,0,1.04,.3,.62,c,0,0,0,.8); }
-  if(acc.includes('a_chain')) body.mesh(TM.tor,0,2.12,.26,.38,.38,.38,0,'#F0BC3E');
-  // neck + head
-  body.cyl(0,2.28,0,.17,.2,dark); body.ball(0,2.62,0,.45,.5,.46,skin);
-  body.box(-.46,2.6,0,.08,.2,.14,skin,0,0,0,1); body.box(.46,2.6,0,.08,.2,.14,skin,0,0,0,1);
-  body.box(-.17,2.63,.43,.1,.1,.05,'#15112B',0,0,0,1); body.box(.17,2.63,.43,.1,.1,.05,'#15112B',0,0,0,1);
-  body.box(-.17,2.74,.43,.16,.04,.04,'#1b120c',0,0,0,1); body.box(.17,2.74,.43,.16,.04,.04,'#1b120c',0,0,0,1);
-  body.box(0,2.5,.46,.1,.16,.1,shade(skin,-.1),0,0,0,1); body.box(0,2.34,.43,.2,.03,.04,'#3a1f16',0,0,0,1);
-  if(acc.includes('a_beard')){ body.ball(0,2.3,.28,.3,.2,.24,'#15110e'); }
-  if(acc.includes('a_shades')){ body.box(0,2.64,.46,.74,.14,.05,'#0a0a12',0,0,0,1); body.box(-.4,2.64,.22,.04,.05,.5,'#0a0a12',0,0,0,1); body.box(.4,2.64,.22,.04,.05,.5,'#0a0a12',0,0,0,1); }
-  // head wear
-  const hc = cp.c;
-  if(cp.st === 'none' || cp.st === 'ball'){ body.mesh(TM.ico,0,2.84,-.04,.47,.3,.5,0,'#15110e'); }
-  if(cp.st === 'hula'){ body.mesh(TM.cyl,0,3.02,0,.46,.34,.46,0,hc); body.mesh(TM.cyl,0,3.17,0,.52,.06,.52,0,shade(hc,.18)); body.box(0,2.88,0,.97,.08,.97,shade(hc,-.2),0,0,0,1); body.mesh(TM.cyl,0,2.84,0,.47,.1,.47,0,shade(hc,-.15)); }
-  if(cp.st === 'fila'){ body.mesh(TM.ico,0,2.9,-.03,.5,.3,.52,0,hc); body.box(0,2.84,0,.96,.1,.96,shade(hc,-.2),0,0,0,1); body.box(.1,3.02,.1,.3,.16,.3,shade(hc,.2),.5,0,0,1); }
-  if(cp.st === 'ball'){ body.mesh(TM.ico,0,2.92,-.03,.5,.3,.52,0,hc); body.box(0,2.84,.5,.7,.06,.5,shade(hc,-.2),0,0,0,1); }
-  if(cp.st === 'rawani'){ body.ball(0,2.98,0,.56,.34,.56,hc); body.mesh(TM.tor,0,2.86,0,.6,.9,.6,0,shade(hc,-.1)); body.mesh(TM.tor,0,3.04,0,.52,.7,.52,.8,shade(hc,.08)); body.box(-.5,2.7,-.1,.16,.7,.3,hc,0,0,0,1); }
-  // arms (pivot at shoulder y=2.05, hang down)
-  for(const [b,x] of [[aL,-1],[aR,1]]){
-    const sleeve = st === 'tee' || st === 'jersey' ? .45 : 1;
-    const wide = longRobe ? .46 : st === 'hoodie' ? .34 : .28;
-    b.box(0,-.45*sleeve,0,wide,.9*sleeve,wide+.02,c,0,0,0,1);
-    if(sleeve < 1) b.box(0,-.45-.45*sleeve+.22,0,.24,.9-.9*sleeve+.0,.26,skin,0,0,0,1);
-    if(longRobe) b.box(0,-.95,0,.5,.1,.5,t,0,0,0,1);
-    if(kaf) b.box(0,-.88,0,.32,.06,.32,t,0,0,0,1);
-    if(st === 'tee' || st === 'jersey') b.box(0,-.35,0,.3,.1,.32,t,0,0,0,1);
-    b.ball(0,-1.0-(longRobe?.1:0),0,.15,.15,.15,skin);
-    if(x < 0 && acc.includes('a_watch')) b.box(0,-.86,0,.32,.1,.32,'#15112B',0,0,0,1);
-  }
-  const g = {body:body.geo(), aL:aL.geo(), aR:aR.geo(), lL:lL.geo(), lR:lR.geo()};
-  avGeo[key] = g; return g;
-}
-function shade(hex,k){ const c = new THREE.Color(hex); if(k < 0) c.lerp(new THREE.Color('#000'), -k); else c.lerp(new THREE.Color('#fff'), k); return '#'+c.getHexString(); }
-function makeAvatar(look){
-  look = Object.assign({skin:'#8A5A3B',outfit:'o_kaftan_in',cap:'c_hula_sand',acc:[]}, look||{});
-  const P_ = avatarParts(look), g = new THREE.Group();
-  const mat = MAT.flat;
-  const part = (geo,x,y) => { const m = new THREE.Mesh(geo,mat); m.position.set(x,y,0); m.castShadow = true; g.add(m); return m; };
-  part(P_.body,0,0);
-  const legL = part(P_.lL,-.26,1.15), legR = part(P_.lR,.26,1.15);
-  const armL = part(P_.aL,-.66,2.05), armR = part(P_.aR,.66,2.05);
-  const blob = mk(GC,SHADOW,0,.03,0,1.7,.02,1.7,g); blob.userData.blob = true;
-  g.userData = {legL,legR,armL,armR,look};
-  return g;
-}
-const person = (body, cap, skin) => makeAvatar({skin:skin||'#8A5A3B', outfit:'o_kaftan_in', cap:'c_hula_sand'});
-function animPerson(g, ph, amt){ const u = g.userData; const a = Math.sin(ph)*.8*amt; u.legL.rotation.x = a; u.legR.rotation.x = -a; u.armL.rotation.x = -a*.8; u.armR.rotation.x = a*.8; }
-function seatAvatar(g, on){ const u = g.userData; if(on){ u.legL.rotation.x = u.legR.rotation.x = -1.4; u.armL.rotation.x = u.armR.rotation.x = -1.0; } }
-const lookCode = l => [SKINS.indexOf(l.skin), OUTFITS.findIndex(o => o.id === l.outfit), CAPS.findIndex(o => o.id === l.cap), (l.acc||[]).map(a => ACCS.findIndex(x => x.id === a)).join('.')].join(',');
-function lookFromCode(s){ try{ const p = String(s).split(','); return {skin:SKINS[+p[0]]||SKINS[3], outfit:(OUTFITS[+p[1]]||OUTFITS[0]).id, cap:(CAPS[+p[2]]||CAPS[0]).id, acc:(p[3]||'').split('.').filter(x => x !== '').map(i => (ACCS[+i]||{}).id).filter(Boolean)}; }catch(e){ return null; } }
-
 /* ---------- vehicle models: two merged meshes (paint + detail) per kind ---------- */
 const vehGeo = {};
 function vehicleParts(kind){
@@ -1077,23 +1931,13 @@ function vehicleParts(kind){
   } else if(kind === 'bike'){
     d.cylx(0,.62,1.3,.62,.35,TY); d.cylx(0,.62,-1.3,.62,.35,TY); p.box(0,1.15,0,.5,.5,2.8,W_,0,0,0,.9); p.box(0,1.65,-.5,.7,.5,.9,W_,0,0,0,.9); d.box(0,1.4,.55,.6,.2,1.1,'#222',0,0,0,1); d.box(0,1.85,-1.2,1.3,.1,.1,'#333',0,0,0,1); d.box(0,1.25,-1.45,.12,.6,.1,'#333',0,0,0,1); d.box(0,1.55,-1.65,.5,.3,.12,LT,0,0,0,1);
   } else {
-    // 4-wheelers share a layout, dimensions differ
-    const T = {hatch:{w:3.5,h:1.2,l:6.8,cw:3.2,ch:1.1,cl:4.2,cz:-.2,ground:.55}, sedan:{w:3.7,h:1.2,l:8.2,cw:3.3,ch:1.0,cl:4.2,cz:-.3,ground:.55}, pickup:{w:3.9,h:1.5,l:8.8,cw:3.5,ch:1.3,cl:3.0,cz:-1.9,ground:.8}, suv:{w:4.0,h:1.7,l:8.2,cw:3.8,ch:1.5,cl:5.6,cz:.4,ground:.85}, suv2:{w:4.2,h:1.9,l:8.8,cw:4.0,ch:1.6,cl:6.0,cz:.5,ground:.95}, coupe:{w:3.9,h:.95,l:8.4,cw:3.2,ch:.85,cl:3.4,cz:-.6,ground:.4}}[kind] || {w:3.7,h:1.2,l:8,cw:3.3,ch:1,cl:4,cz:-.3,ground:.55};
-    const by = T.ground + T.h/2 + .25;
-    p.box(0,by,0,T.w,T.h,T.l,W_,0,0,0,.75);
-    if(kind === 'pickup'){ p.box(0,by+T.h/2+.65,-1.9,T.cw,1.3,3.1,W_,0,0,0,.85); d.box(0,by+T.h/2+.55,-1.9,T.cw-.2,1.1,2.8,GL,0,0,0,1); p.box(0,by+T.h/2+.15,2.2,T.w-.2,.3,3.8,W_,0,0,0,.9); d.box(0,by+.2,2.2,T.w-.5,.1,3.4,'#2a2a30',0,0,0,1); }
-    else { p.box(0,by+T.h/2+T.ch/2-.05,T.cz,T.cw,T.ch,T.cl,W_,0,0,0,.85); d.box(0,by+T.h/2+T.ch/2,T.cz,T.cw+.06,T.ch*.62,T.cl-.5,GL,0,0,0,1); d.box(0,by+T.h/2+T.ch/2,T.cz,T.cw-.4,T.ch*.62,T.cl+.06,GL,0,0,0,1); }
-    wheel(-T.w/2+.05,T.ground,2.5,T.ground+.05); wheel(T.w/2-.05,T.ground,2.5,T.ground+.05); wheel(-T.w/2+.05,T.ground,-2.5,T.ground+.05); wheel(T.w/2-.05,T.ground,-2.5,T.ground+.05);
-    lights(T.w/2-.7, by+.1, T.l/2+.02, -T.l/2-.02); d.box(0,by-.3,T.l/2+.05,T.w-.4,.35,.2,'#2a2a30',0,0,0,1); d.box(0,by-.3,-T.l/2-.05,T.w-.4,.35,.2,'#2a2a30',0,0,0,1);
-    d.box(0,by-.05,T.l/2+.07,1.3,.45,.05,'#ececec',0,0,0,1); d.box(0,by+.15,T.l/2+.03,2.4,.2,.05,CH,0,0,0,1);
-    if(kind === 'suv' || kind === 'suv2') d.box(0,by+T.h/2+T.ch+.12,T.cz,T.cw-.8,.1,T.cl-1,CH,0,0,0,1);
-    if(kind === 'coupe'){ d.box(0,by+T.h/2+.55,-3.4,T.w-.6,.1,.9,'#15151c',0,0,0,1); }
+    carBody(kind,p,d);
   }
   const g = {paint:p.geo(), detail:d.geo()}; vehGeo[kind] = g; return g;
 }
 const paintMats = {};
-const paintMat = c => paintMats[c] || (paintMats[c] = new THREE.MeshLambertMaterial({color:c, vertexColors:true}));
-const detailMat = new THREE.MeshLambertMaterial({vertexColors:true});
+const paintMat = c => paintMats[c] || (paintMats[c] = new THREE.MeshPhysicalMaterial({color:c, vertexColors:true, metalness:.5, roughness:.36, clearcoat:.8, clearcoatRoughness:.12, envMapIntensity:.8}));
+const detailMat = new THREE.MeshStandardMaterial({vertexColors:true, metalness:.25, roughness:.5, envMapIntensity:.8});
 const headGlowMat = new THREE.SpriteMaterial({map:glowTex,color:'#fff2c0',transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,opacity:0});
 const tailGlowMat = new THREE.SpriteMaterial({map:glowTex,color:'#ff3a2a',transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,opacity:0});
 function makeVehicle(kind, color, glow){
@@ -1106,6 +1950,396 @@ function makeVehicle(kind, color, glow){
   return g;
 }
 const kekeModel = col => makeVehicle('keke', col, false);
+
+/* ---- c_avatar.js ---- */
+/* ===== SMOOTH CHARACTERS: lofted bodies, faces, hair, clothing, two-segment limbs ===== */
+/* Every shape is a "loft": a stack of ellipse rings with smooth analytic normals. */
+const _V = new THREE.Vector3(), _M = new THREE.Matrix4(), _E = new THREE.Euler();
+Batch.prototype.loft = function(rings, col, o){
+  o = o || {}; const N = o.N || 22, R = rings.length; if(R < 2) return this;
+  const base = this.vc, P = [], Nn = new Float32Array(N*R*3 + 6), cF = o.colFn, k0 = o.k === undefined ? 1 : o.k, cbase = rgb(col);
+  // positions
+  for(let r = 0; r < R; r++){ const q = rings[r], y = q[0], rx = Math.max(.0005,q[1]), rz = Math.max(.0005,q[2]), cx = q[3] || 0, cz = q[4] || 0;
+    const ex = 2/(q[5]||2); for(let j = 0; j < N; j++){ const th = j/N*6.283185, sn = Math.sin(th), cs = Math.cos(th); P.push(cx + rx*Math.sign(sn)*Math.pow(Math.abs(sn),ex), y, cz + rz*Math.sign(cs)*Math.pow(Math.abs(cs),ex)); } }
+  // smooth normals by accumulating face normals
+  const ids = [], idx = (r,j) => r*N + (j%N);
+  for(let r = 0; r < R-1; r++) for(let j = 0; j < N; j++){ const a = idx(r,j), b = idx(r,j+1), c = idx(r+1,j), d = idx(r+1,j+1); ids.push(a,b,c, b,d,c); }
+  const acc = (a,b,c) => { const ax = P[a*3], ay = P[a*3+1], az = P[a*3+2], ux = P[b*3]-ax, uy = P[b*3+1]-ay, uz = P[b*3+2]-az, vx = P[c*3]-ax, vy = P[c*3+1]-ay, vz = P[c*3+2]-az;
+    const nx = uy*vz-uz*vy, ny = uz*vx-ux*vz, nz = ux*vy-uy*vx; for(const t of [a,b,c]){ Nn[t*3] += nx; Nn[t*3+1] += ny; Nn[t*3+2] += nz; } };
+  for(let i = 0; i < ids.length; i += 3) acc(ids[i],ids[i+1],ids[i+2]);
+  // end poles
+  const total = N*R; let pole0 = -1, pole1 = -1;
+  if(o.cap0 !== false){ const q = rings[0]; pole0 = total; P.push(q[3]||0, q[0]-(o.d0||0), q[4]||0); for(let j = 0; j < N; j++){ ids.push(pole0, idx(0,j+1), idx(0,j)); } Nn[pole0*3+1] = -1; }
+  if(o.cap1 !== false){ const q = rings[R-1]; pole1 = total + (pole0 >= 0 ? 1 : 0); P.push(q[3]||0, q[0]+(o.d1||0), q[4]||0); for(let j = 0; j < N; j++){ ids.push(pole1, idx(R-1,j), idx(R-1,j+1)); } Nn[pole1*3+1] = 1; }
+  const cnt = P.length/3;
+  if(o.rot){ _E.set(o.rot[0]||0,o.rot[1]||0,o.rot[2]||0,'YXZ'); _M.makeRotationFromEuler(_E); } else _M.identity();
+  const at = o.at || [0,0,0], sc = o.sc;
+  for(let i = 0; i < cnt; i++){
+    _V.set(P[i*3],P[i*3+1],P[i*3+2]); if(sc) _V.multiply(new THREE.Vector3(sc[0],sc[1],sc[2])); _V.applyMatrix4(_M); const wx = _V.x+at[0], wy = _V.y+at[1], wz = _V.z+at[2];
+    let nx = Nn[i*3], ny = Nn[i*3+1], nz = Nn[i*3+2]; const l = Math.hypot(nx,ny,nz) || 1; _V.set(nx/l,ny/l,nz/l).transformDirection(_M); nx = _V.x; ny = _V.y; nz = _V.z;
+    let c = cbase; if(cF){ const cc = cF(P[i*3],P[i*3+1],P[i*3+2],nx,ny,nz); if(cc) c = rgb(cc); }
+    this.p.push(wx,wy,wz); this.n.push(nx,ny,nz); this.c.push(c[0]*k0,c[1]*k0,c[2]*k0); this.u.push(0,0);
+  }
+  for(const t of ids) this.i.push(base + t); this.vc += cnt; return this;
+};
+/* ellipsoid (optionally a latitude slice: lat0..lat1 in 0..PI, 0 = top) */
+Batch.prototype.ell = function(x,y,z,rx,ry,rz,col,o){
+  o = o || {}; const L = o.L || 10, a0 = o.lat0 === undefined ? 0 : o.lat0, a1 = o.lat1 === undefined ? Math.PI : o.lat1, rings = [];
+  for(let i = 0; i <= L; i++){ const a = a1 + (a0-a1)*i/L; rings.push([Math.cos(a)*ry, Math.max(.0005,Math.sin(a)*rx), Math.max(.0005,Math.sin(a)*rz)]); }
+  rings.sort((p,q) => p[0]-q[0]);
+  const oo = Object.assign({}, o, {at:[(o.at?o.at[0]:0)+x,(o.at?o.at[1]:0)+y,(o.at?o.at[2]:0)+z]}); return this.loft(rings,col,oo);
+};
+const lerpTab = (T,y,i) => { if(y <= T[0][0]) return T[0][i]; for(let k = 1; k < T.length; k++){ if(y <= T[k][0]){ const t = (y-T[k-1][0])/(T[k][0]-T[k-1][0]); return T[k-1][i]+(T[k][i]-T[k-1][i])*t; } } return T[T.length-1][i]; };
+const mixc = (a,b,t) => { const A = rgb(a), B = rgb(b); return [A[0]+(B[0]-A[0])*t, A[1]+(B[1]-A[1])*t, A[2]+(B[2]-A[2])*t]; };
+
+/* ---- body frames ---- */
+const FRAME = {
+  m:{ torso:[[1.0,.27,.2],[1.12,.33,.22],[1.25,.345,.225],[1.45,.30,.2],[1.7,.34,.215],[1.95,.40,.235],[2.12,.44,.22],[2.24,.40,.18],[2.34,.20,.14],[2.43,.115,.115]], sh:.46, ax:.17, lk:1, ak:1.0, chin:.16 },
+  f:{ torso:[[1.0,.27,.2],[1.12,.35,.235],[1.25,.375,.25],[1.42,.27,.19],[1.55,.245,.175],[1.75,.28,.2],[1.88,.31,.225],[1.99,.325,.28],[2.1,.34,.24],[2.24,.31,.17],[2.34,.17,.125],[2.43,.10,.10]], sh:.385, ax:.175, lk:.93, ak:.84, chin:.145 }
+};
+const HAIRS = {m:[['h_bald','Bald'],['h_crop','Low crop'],['h_fade','Fade'],['h_afro','Afro'],['h_twist','Twists']], f:[['h_low','Natural low'],['h_afro','Afro'],['h_braids','Long braids'],['h_bun','Bun'],['h_bob','Bob']]};
+const HAIR_COL = '#16110e';
+const AV_MAT = new THREE.MeshStandardMaterial({vertexColors:true, roughness:.62, metalness:.02});
+MAT.av = AV_MAT;
+
+/* ---- outfit slicing helpers (all positions in avatar space; arms/legs in their own pivot space) ---- */
+function torsoRings(F, ya, yb, off, flare, step){
+  const out = [], T = F.torso; step = step || .1; const n = Math.max(2,Math.ceil((yb-ya)/step));
+  for(let i = 0; i <= n; i++){ const y = ya+(yb-ya)*i/n, f = flare ? flare(y) : 0; out.push([y, lerpTab(T,y,1)+off+f, lerpTab(T,y,2)+off+f*.8]); }
+  return out;
+}
+function limbShell(b, pts, col, o){ // pts [y,rx,rz] descending from top (pivot) -> down; shifted by oy
+  const oy = (o && o.oy) || 0, off = (o && o.off) || 0, at = (o && o.at) || [0,0,0];
+  const rings = pts.map(p => [p[0]+oy, p[1]+off, (p[2] === undefined ? p[1] : p[2])+off]).sort((p,q) => p[0]-q[0]);
+  return b.loft(rings, col, Object.assign({N:o && o.N || 18, at}, o||{}, {at}));
+}
+const THIGH = [[0,.2,.2],[-.12,.19,.19],[-.3,.17,.17],[-.45,.15,.15],[-.58,.135,.135]];
+const SHIN = [[0,.135,.14],[-.1,.12,.13],[-.2,.108,.118],[-.35,.085,.09],[-.5,.07,.075]];
+const UARM = [[0,.115,.115],[-.12,.11,.11],[-.3,.098,.098],[-.5,.085,.085]];
+const FARM = [[0,.085,.085],[-.1,.082,.08],[-.25,.07,.066],[-.45,.052,.046]];
+const scl = (pts,k) => pts.map(p => [p[0],p[1]*k,(p[2]===undefined?p[1]:p[2])*k]);
+const cut = (pts,y0,y1) => { // sub-range of limb table (y descending), interpolated at the ends
+  const at = y => [y, lerpDesc(pts,y,1), lerpDesc(pts,y,2)]; const mid = pts.filter(p => p[0] < y0 && p[0] > y1); return [at(y0)].concat(mid,[at(y1)]); };
+function lerpDesc(T,y,i){ if(y >= T[0][0]) return T[0][i]; for(let k = 1; k < T.length; k++){ if(y >= T[k][0]){ const t = (T[k-1][0]-y)/(T[k-1][0]-T[k][0]); return T[k-1][i]+(T[k][i]-T[k-1][i])*t; } } return T[T.length-1][i]; }
+
+/* ---- the builder: returns merged geometries for each rig part ---- */
+const avGeo = {};
+function avatarParts(look, lite){
+  const key = [look.skin,look.outfit,look.cap,look.body||'m',look.hair||'',(look.acc||[]).join(','),lite?1:0].join('|');
+  if(avGeo[key]) return avGeo[key];
+  const o = oOf(look.outfit), cp = cOf(look.cap), skin = look.skin, acc = look.acc || [], bd = look.body === 'f' ? 'f' : 'm', F = FRAME[bd];
+  const top = o.top || {k:'tee',c:'#888'}, bot = o.bot || {k:'trousers',c:'#333'}, sh = o.sh || {k:'shoe',c:'#222'};
+  const sk2 = shade(skin,-.18), lip = mixc(skin,'#7a2a2a',bd === 'f' ? .45 : .28), hairCol = HAIR_COL;
+  const B = new Batch(), UL = new Batch(), UR = new Batch(), FL = lite ? UL : new Batch(), FR = lite ? UR : new Batch(), TL = new Batch(), TR = new Batch(), SL = lite ? TL : new Batch(), SR = lite ? TR : new Batch();
+  const FOy = lite ? -.5 : 0, SOy = lite ? -.58 : 0;   // when merged, the lower segment is built at its rest offset
+  const tk = top.k, long = ['long','hoodie','jacket','blazer','kaftan','robe','ankara','puffer'].includes(tk);
+  const isRobe = tk === 'robe', isDress = tk === 'dress', hasSkirt = bot.k === 'skirt';
+  const swing = isRobe ? .35 : (isDress || hasSkirt) ? .55 : 1;
+  const tc = top.c, tt = top.t || shade(top.c,.3), inner = top.i || '#E9E5DA';
+  const ankara = (c1,c2) => (x,y,z) => { const s = Math.sin(x*15+y*6)*Math.sin(y*17-z*10); return s > .28 ? c2 : (Math.sin(y*26+x*9) > .86 ? c2 : c1); };
+
+  /* ===== skin body ===== */
+  const torso = [], T = F.torso; for(let y = 1.0; y <= 2.43; y += .1) torso.push([y, lerpTab(T,y,1), lerpTab(T,y,2)]); torso.push([2.43,lerpTab(T,2.43,1),lerpTab(T,2.43,2)]);
+  B.loft(torso, skin, {N:24, d0:.02});
+  B.loft([[2.38,.115,.115],[2.55,.095,.1],[2.72,.092,.1]], skin, {N:14, cap1:false});
+  // head
+  const hy = 2.9; B.ell(0,hy,0,.243,.3,.268,skin,{L:14,N:26});
+  B.ell(0,hy-.165,.05,F.chin*.98,.115,F.chin*1.0,skin,{L:8,N:20});
+  // ears, nose, lips, brows, eyes
+  for(const s of [-1,1]){ B.ell(s*.243,hy-.01,-.01,.024,.056,.04,sk2,{L:6,N:10});
+    B.ell(s*.088,hy+.035,.243,.05,.03,.026,'#F6F2EA',{L:6,N:12}); B.ell(s*.088,hy+.035,.263,.024,.026,.014,'#1c1210',{L:6,N:10});
+    B.ell(s*.09,hy+.085,.245,.062,.011,.028,hairCol,{L:5,N:10,rot:[0,0,s*(bd==='f'?-.12:.05)]}); }
+  B.ell(0,hy-.045,.272,.036,.058,.04,shade(skin,-.05),{L:7,N:12}); B.ell(0,hy-.085,.296,.035,.03,.03,shade(skin,-.08),{L:6,N:12});
+  B.ell(0,hy-.152,.262,.052,.012,.026,lip,{L:5,N:14}); B.ell(0,hy-.168,.258,.044,.012,.022,mixc(lip,skin,.4),{L:5,N:14});
+  if(bd === 'f'){ for(const s of [-1,1]) B.ell(s*.09,hy+.058,.248,.056,.008,.02,'#0e0a08',{L:4,N:10}); }
+
+  /* ===== hair ===== */
+  const hairId = look.hair || (bd === 'f' ? 'h_low' : 'h_crop');
+  const hasCap = cp.st !== 'none';
+  const skinFade = (x,y,z) => { const t = clamp((y-(hy+.03))/.14,0,1); return mixc(skin,hairCol,.28+.72*t); };
+  if(!hasCap || cp.st === 'ball'){
+    if(hairId === 'h_crop' || hairId === 'h_low' || hairId === 'h_bun' || hairId === 'h_bob' || hairId === 'h_braids'){
+      B.ell(0,hy+.015,-.02,.256,.305,.272,hairCol,{L:12,N:26,lat0:0,lat1:1.32});
+      B.ell(0,hy+.0,-.07,.255,.27,.235,hairCol,{L:8,N:22,lat0:.4,lat1:1.95}); }
+    if(hairId === 'h_fade'){ B.ell(0,hy+.01,-.02,.252,.3,.268,hairCol,{L:12,N:26,lat0:0,lat1:1.42,colFn:skinFade}); B.ell(0,hy,-.06,.25,.28,.24,hairCol,{L:8,N:22,lat0:.4,lat1:1.9,colFn:skinFade}); }
+    if(hairId === 'h_afro'){ B.ell(0,hy+.12,-.1,.37,.36,.36,hairCol,{L:12,N:26,lat0:0,lat1:2.05}); }
+    if(hairId === 'h_twist'){ B.ell(0,hy+.05,-.03,.262,.31,.28,hairCol,{L:12,N:26,lat0:0,lat1:1.3}); for(let i = 0; i < 14; i++){ const a = i/14*6.283, rr = .17; B.ell(Math.sin(a)*rr,hy+.27+Math.cos(i*2.3)*.03,Math.cos(a)*rr*.9-.03,.05,.1,.05,hairCol,{L:5,N:8,rot:[Math.cos(a)*.35,0,-Math.sin(a)*.35]}); } }
+    if(hairId === 'h_bun'){ B.ell(0,hy+.28,-.12,.12,.1,.12,hairCol,{L:8,N:14}); }
+    if(hairId === 'h_bob'){ B.loft([[hy-.19,.26,.22,0,-.07],[hy-.05,.275,.255,0,-.05],[hy+.1,.262,.27,0,-.03]], hairCol, {N:24,cap0:false,cap1:false}); }
+    if(hairId === 'h_braids'){ for(let i = 0; i < 12; i++){ const a = 1.9+i*(6.283-3.8)/11 - 0; const px = Math.sin(a)*.235, pz = Math.cos(a)*.23-.03, ln = .7+((i*37)%5)*.08; B.loft([[2.18-ln*.35+.05,.022,.022,px*1.18,pz*1.25-.05],[2.4,.03,.03,px*1.1,pz*1.2-.04],[hy+.08,.04,.04,px*1.02,pz*1.05]],hairCol,{N:7,cap0:true}); } }
+  }
+  if(hairId === 'h_afro' && cp.st === 'fila') {}
+
+  /* ===== headwear ===== */
+  const hc = cp.c;
+  if(cp.st === 'hula'){
+    B.loft([[hy+.04,.262,.28],[hy+.13,.255,.268],[hy+.2,.262,.27],[hy+.29,.305,.31],[hy+.3,.31,.315],[hy+.31,.29,.29],[hy+.311,.01,.01]], hc, {N:30});
+    B.loft([[hy+.04,.268,.286],[hy+.09,.262,.278]], shade(hc,-.22), {N:30,cap0:false,cap1:false});
+    B.loft([[hy+.21,.268,.272],[hy+.245,.285,.29]], shade(hc,-.12), {N:30,cap0:false,cap1:false}); }
+  if(cp.st === 'fila'){
+    B.ell(0,hy+.08,0,.268,.22,.285,hc,{L:12,N:26,lat0:0,lat1:1.6}); B.loft([[hy+.04,.272,.29],[hy+.1,.27,.285]], shade(hc,-.2), {N:26,cap0:false,cap1:false});
+    B.ell(.12,hy+.2,.06,.17,.07,.17,shade(hc,.14),{L:6,N:14,rot:[0,0,-.4]}); }
+  if(cp.st === 'ball'){
+    B.ell(0,hy+.075,0,.262,.23,.282,hc,{L:12,N:26,lat0:0,lat1:1.62});
+    B.loft([[hy+.08,.04,.02,0,.34],[hy+.095,.15,.1,0,.4],[hy+.12,.2,.17,0,.28]], shade(hc,-.22), {N:20,rot:[.12,0,0]}); B.ell(0,hy+.32,0,.025,.02,.025,shade(hc,-.2),{L:4,N:8}); }
+  if(cp.st === 'rawani'){
+    for(let i = 0; i < 4; i++){ const yy = hy+.08+i*.07, rr = .29-i*.012; B.loft([[yy-.04,rr,rr*1.04,0,-.01],[yy,rr+.025,(rr+.025)*1.04,0,-.01],[yy+.04,rr,rr*1.04,0,-.01]], i%2 ? shade(hc,-.1) : hc, {N:30,cap0:false,cap1:false}); }
+    B.ell(0,hy+.34,-.01,.27,.12,.27,hc,{L:8,N:26,lat0:0,lat1:1.57}); B.ell(-.27,hy-.05,-.1,.07,.22,.1,hc,{L:6,N:12,rot:[0,0,.1]});
+    if(cp.id === 'c_royal') B.ell(0,hy+.17,.3,.035,.035,.02,'#C73A5A',{L:6,N:10}); }
+
+  /* ===== accessories on the head/neck ===== */
+  if(acc.includes('a_beard')){ B.loft([[hy-.27,.12,.1,0,.14],[hy-.2,.2,.16,0,.12],[hy-.1,.24,.22,0,.03],[hy-.03,.245,.21,0,-.01]], '#15110e', {N:22,cap0:true,cap1:false}); B.ell(0,hy-.15,.24,.07,.025,.03,mixc('#15110e',lip,.3),{L:4,N:10}); }
+  if(acc.includes('a_shades')){ for(const s of [-1,1]) B.ell(s*.092,hy+.035,.258,.075,.05,.02,'#08080e',{L:7,N:16}); B.ell(0,hy+.04,.262,.03,.01,.012,'#08080e',{L:4,N:8}); B.loft([[hy+.035,.01,.01,-.24,0],[hy+.035,.01,.01,-.24,.15]],'#08080e',{N:6,cap0:false,cap1:false}); }
+  if(acc.includes('a_chain')){ const cr = [[2.3,.2,.16],[2.285,.215,.17],[2.27,.2,.16]]; B.loft(cr.map(r => [r[0],r[1],r[2],0,.02]),'#F0BC3E',{N:24,cap0:false,cap1:false}); B.ell(0,2.13,.2,.045,.045,.02,'#F0BC3E',{L:6,N:10}); }
+
+  /* ===== torso garments ===== */
+  const fz = (y,off) => lerpTab(F.torso,y,2)+off+.004;
+  const hem = {tee:1.36,crop:1.8,polo:1.3,jersey:1.18,tank:1.38};
+  const sleeveFull = long, sleeveShort = ['tee','polo','jersey','crop'].includes(tk);
+  const flareF = (k) => (y) => (y < 1.3 ? (1.3-y)*k : 0);
+  if(tk === 'tee' || tk === 'polo' || tk === 'crop' || tk === 'tank' || tk === 'jersey'){
+    const y0 = hem[tk]; const off = tk === 'jersey' ? .045 : .022;
+    const stripe = tk === 'jersey' ? (x,y,z) => (y > 1.62 && y < 1.74 ? tt : tc) : (tk === 'tee' && top.p === 'ankara' ? ankara(tc,tt) : null);
+    B.loft(torsoRings(F,y0,2.34,off,tk === 'jersey' ? flareF(.03) : null,.09), tc, {N:26,colFn:stripe,cap0:false,cap1:false});
+    B.loft([[2.34,.17,.135],[2.375,.15,.125],[2.40,.135,.115]], tt, {N:20,cap0:false,cap1:false});
+    if(tk === 'polo'){ B.ell(0,2.13,fz(2.13,.022),.025,.17,.012,tt,{L:5,N:8}); for(const s of [-1,1]) B.ell(s*.07,2.37,.12,.075,.02,.06,tt,{L:4,N:8,rot:[.5,0,s*.4]}); }
+    if(tk === 'jersey'){ for(const s of [-1,1]) B.ell(s*.07,2.28,fz(2.28,.045),.09,.02,.014,tt,{L:4,N:8,rot:[0,0,s*-.7]}); }
+  }
+  if(tk === 'long' || tk === 'ankara'){
+    B.loft(torsoRings(F,hasSkirt ? 1.46 : 1.2,2.34,.03,flareF(.02),.09), tc, {N:26,colFn:tk === 'ankara' ? ankara(tc,tt) : null,cap0:false,cap1:false});
+    B.loft([[2.34,.17,.135],[2.375,.15,.125],[2.40,.135,.115]], tt, {N:20,cap0:false,cap1:false}); }
+  if(tk === 'hoodie' || tk === 'puffer'){
+    const puf = tk === 'puffer', off = puf ? .075 : .055;
+    B.loft(torsoRings(F,1.12,2.34,off,flareF(.04),.07), tc, {N:28,colFn:puf ? ((x,y)=> mixc(tc,'#000',(Math.sin(y*30)>.7?.18:0))) : null,cap0:false,cap1:false});
+    B.loft([[2.34,.19,.15],[2.4,.17,.14],[2.46,.15,.13]], shade(tc,-.12), {N:20,cap0:false,cap1:false});
+    if(!puf){ B.ell(0,2.47,-.1,.2,.14,.17,shade(tc,-.08),{L:8,N:16}); B.ell(0,1.45,fz(1.45,.055),.22,.085,.03,shade(tc,-.15),{L:5,N:14}); for(const s of [-1,1]) B.ell(s*.07,2.12,fz(2.12,.055),.012,.2,.012,tt,{L:4,N:8}); } }
+  if(tk === 'jacket'){
+    const innerC = inner, zip = tt;
+    B.loft(torsoRings(F,1.25,2.34,.05,null,.07), tc, {N:30,colFn:(x,y,z) => (z > 0 && Math.abs(x) < .06 ? innerC : (z > 0 && Math.abs(x) < .075 ? zip : tc)),cap0:false,cap1:false});
+    B.loft([[2.34,.19,.15],[2.4,.17,.14],[2.45,.15,.13]], tc, {N:20,cap0:false,cap1:false});
+    for(const s of [-1,1]) B.ell(s*.09,2.38,.12,.085,.025,.07,shade(tc,-.1),{L:4,N:8,rot:[.5,0,s*.4]}); }
+  if(tk === 'blazer'){
+    B.loft(torsoRings(F,1.02,2.34,.045,null,.07), tc, {N:30,colFn:(x,y,z) => (z > 0 && Math.abs(x) < .085 && y > 1.4 ? inner : tc),cap0:false,cap1:false});
+    B.loft([[2.34,.17,.135],[2.375,.15,.125],[2.40,.135,.115]], '#F4F1EA', {N:20,cap0:false,cap1:false});
+    for(const s of [-1,1]) B.ell(s*.085,2.1,fz(2.1,.045),.045,.26,.014,shade(tc,.1),{L:5,N:10,rot:[0,0,s*.22]});
+    B.ell(0,1.93,fz(1.93,.045),.03,.22,.012,tt,{L:5,N:10}); }
+  if(tk === 'kaftan'){
+    const pr = []; for(let y = .58; y <= 2.34; y += .12) pr.push([y, lerpTab(F.torso,y<1?1.0:y,1)+.045+(y<1.1?(1.1-y)*.06:0)+(y<1?.04:0), lerpTab(F.torso,y<1?1.0:y,2)+.045+(y<1.1?(1.1-y)*.05:0)+(y<1?.04:0)]);
+    B.loft(pr, tc, {N:28,cap0:false,cap1:false,colFn:(x,y,z) => (y < .66 ? tt : null)});
+    B.loft([[2.34,.17,.135],[2.375,.15,.125],[2.40,.135,.115]], tt, {N:20,cap0:false,cap1:false});
+    B.ell(0,1.98,fz(1.98,.045),.05,.34,.016,tt,{L:6,N:10}); B.ell(0,1.55,fz(1.55,.045),.12,.03,.016,tt,{L:4,N:10}); }
+  if(isRobe){
+    const pr = []; for(let y = .1; y <= 2.34; y += .14){ const f = y < 1.2 ? (1.2-y)*.12 : 0; pr.push([y, lerpTab(F.torso,Math.max(1.0,y),1)+.12+f, lerpTab(F.torso,Math.max(1.0,y),2)+.1+f*.8]); }
+    B.loft(pr, tc, {N:30,cap0:false,cap1:false,colFn:(x,y,z) => (y < .22 ? tt : (z > 0 && Math.abs(x) < .2 && y > .5 && y < 2.2 ? mixc(tc,tt,.55) : null))});
+    B.loft([[2.34,.19,.15],[2.4,.17,.14],[2.45,.14,.12]], tt, {N:20,cap0:false,cap1:false});
+    B.ell(0,1.55,fz(1.55,.12),.2,.62,.02,tt,{L:8,N:14});
+    if(o.cape) B.ell(0,1.2,-.4,.5,1.0,.06,o.cape,{L:8,N:16}); }
+  if(isDress){
+    const sl = tc; const pr = []; const W = .27, hemY = o.hem || .72;
+    const nS = Math.max(3,Math.round((1.5-hemY)/.1)); for(let q = 0; q <= nS; q++){ const y = hemY+(1.5-hemY)*q/nS, t = (1.5-y)/(1.5-hemY); pr.push([y, W+.03+t*.17+(o.flareBoost||0)*t, W*.76+.02+t*.14+(o.flareBoost||0)*t*.8]); }
+    B.loft(pr, tc, {N:28,cap0:false,cap1:false,colFn:top.p === 'ankara' ? ankara(tc,tt) : (y => null)});
+    B.loft(torsoRings(F,1.5,o.neck || 2.15,.015,null,.08), tc, {N:28,cap0:false,cap1:false,colFn:top.p === 'ankara' ? ankara(tc,tt) : null});
+    B.loft([[1.47,.27,.2],[1.53,.275,.205]], tt, {N:24,cap0:false,cap1:false});
+    for(const s of [-1,1]) B.loft([[2.12,.03,.03,s*.2,.0],[2.27,.03,.03,s*.19,-.0]], tc, {N:8,cap0:true}); }
+  if(hasSkirt){
+    const pr = []; for(let q = 0; q <= 8; q++){ const y = .78+.72*q/8, t = (1.5-y)/.72; pr.push([y, .26+.035+t*.17, .19+.03+t*.15]); }
+    B.loft(pr, bot.c, {N:28,cap0:false,cap1:false,colFn:bot.p === 'pleat' ? (x,y,z) => mixc(bot.c,'#000',(Math.sin(Math.atan2(x,z)*18)>.5?.16:0)) : null});
+    B.loft([[1.46,.275,.2],[1.53,.28,.205]], shade(bot.c,-.3), {N:24,cap0:false,cap1:false}); }
+
+  /* ===== pelvis + legs ===== */
+  const needsPelvis = !(isRobe || isDress || hasSkirt);
+  const botC = bot.c, sh_ = sh.c;
+  if(needsPelvis && bot.k !== 'none'){
+    const jf = bot.k === 'joggers' ? .035 : bot.k === 'cargo' ? .04 : .017;
+    B.loft(torsoRings(F,1.0,1.48,jf,null,.08), botC, {N:26,cap0:false,cap1:false,colFn:bot.k === 'jeans' ? ((x,y)=> (y > 1.43 ? '#2b2118' : null)) : null});
+    if(bot.k !== 'shorts' && tk !== 'tee' || true) B.loft([[1.42,.31,.205],[1.5,.312,.207]], shade(botC,-.45), {N:26,cap0:false,cap1:false});
+  }
+  const legSpec = (L_, S_, ox, side) => {
+    const lk = F.lk, y0 = 0;
+    // thigh skin (always, covered by trousers) + shin skin
+    L_.loft(scl(THIGH,lk).map(p => [p[0],p[1],p[2]]).reverse(), skin, {N:18,at:[0,0,0],cap0:true,cap1:true});
+    S_.loft(scl(SHIN,lk).map(p => [p[0]+SOy,p[1],p[2]]).reverse(), skin, {N:16,cap1:false});
+    // trouser fabric
+    if(needsPelvis && bot.k !== 'none'){
+      const fat = bot.k === 'joggers' ? .04 : bot.k === 'cargo' ? .05 : bot.k === 'jeans' ? .022 : .016, tcut = bot.k === 'shorts' ? -.34 : -.58;
+      const tp = scl(cut(THIGH,0,tcut),lk).map(p => [p[0],p[1]+fat,p[2]+fat]);
+      L_.loft(tp.slice().reverse(), botC, {N:18,cap0:true,cap1:bot.k==='shorts',colFn:bot.k === 'jeans' ? ((x,y)=> mixc(botC,'#ffffff',clamp((Math.abs(y+.3)<.12?.12:0),0,.2))) : null});
+      if(bot.k === 'cargo'){ L_.ell(side*.16,-.28,.0,.02,.1,.12,shade(botC,-.1),{L:5,N:10}); }
+      if(bot.k !== 'shorts'){ const sp_ = scl(SHIN,lk).map(p => [p[0]+SOy,p[1]+fat*(bot.k==='joggers'?.5:.6)+(bot.k==='jeans'?.012:0),p[2]+fat*.6]); const sh2 = sp_.filter(p => p[0] > SOy-.4); sh2.push([SOy-.4,(lerpDesc(SHIN,-.4,1))*lk+fat*(bot.k==='joggers'?.2:.8)+(bot.k==='jeans'||bot.k==='trousers'?.03:0),(lerpDesc(SHIN,-.4,2))*lk+fat*.8+(bot.k==='jeans'||bot.k==='trousers'?.03:0)]);
+        S_.loft(sh2.reverse(), botC, {N:16,cap0:true,cap1:false}); }
+    }
+    if(isRobe){ /* hidden by robe */ }
+    // foot / shoe
+    const fy = SOy-.565;
+    if(sh.k === 'sandal'){ S_.ell(0,fy+.01,.09,.09,.045,.2,skin,{L:6,N:12}); S_.ell(0,SOy-.605,.1,.1,.02,.225,sh.c,{L:4,N:14}); S_.ell(0,fy+.04,.07,.098,.02,.04,sh.c,{L:4,N:10}); }
+    else if(sh.k === 'boot'){ S_.loft([[SOy-.61,.105,.2,0,.09],[SOy-.5,.11,.2,0,.075],[SOy-.3,.095,.1,0,.0],[SOy-.2,.095,.1,0,0]].sort((a,b)=>a[0]-b[0]), sh.c, {N:16}); S_.ell(0,SOy-.607,.1,.108,.022,.23,'#201814',{L:4,N:14}); }
+    else if(sh.k === 'sneaker'){ S_.ell(0,fy+.012,.1,.105,.07,.21,sh.c,{L:8,N:16}); S_.ell(0,SOy-.6,.105,.108,.022,.228,'#F4F4F4',{L:4,N:14}); S_.ell(0,fy+.035,.2,.07,.035,.07,shade(sh.c,.25),{L:5,N:10}); S_.ell(0,fy+.06,.12,.05,.01,.1,shade(sh.c,-.2),{L:4,N:8}); }
+    else { S_.ell(0,fy+.01,.1,.1,.065,.215,sh.c,{L:8,N:16}); S_.ell(0,SOy-.603,.1,.103,.02,.226,'#141010',{L:4,N:14}); S_.ell(0,fy-.005,-.09,.08,.04,.04,'#141010',{L:4,N:8}); }
+  };
+  legSpec(TL,SL,-1,-1); legSpec(TR,SR,1,1);
+
+  /* ===== arms ===== */
+  const ak = F.ak, shortS = sleeveShort, longS = sleeveFull || isRobe;
+  const capCol = isRobe ? tc : (isDress || tk === 'tank') ? skin : (shortS || longS) ? (top.s || tc) : skin;
+  const armSpec = (U_, Fo_, side) => {
+    U_.loft(scl(UARM,ak).reverse(), skin, {N:16,cap0:true,cap1:true});
+    U_.ell(0,0.0,0,.118*ak+(capCol===skin?0:.022),.07,.118*ak+(capCol===skin?0:.022),capCol,{L:6,N:12});
+    Fo_.loft(scl(FARM,ak).map(p => [p[0]+FOy,p[1],p[2]]).reverse(), skin, {N:14,cap1:false});
+    Fo_.ell(0,FOy-.52,.0,.056*ak,.08,.036*ak,skin,{L:6,N:10}); Fo_.ell(side*-.04,FOy-.5,.03,.016*ak,.045,.018*ak,skin,{L:4,N:6,rot:[.2,0,0]});
+    if(acc.includes('a_watch') && side < 0) Fo_.loft([[FOy-.34,.07,.066],[FOy-.3,.074,.07]], '#15112B', {N:14,cap0:false,cap1:false});
+    let sf = 0;
+    if(isRobe){ const w = .17; const up = scl(UARM,ak).map(p => [p[0],p[1]+w,p[2]+w*.9]); U_.loft(up.reverse(), tc, {N:16,cap0:true,cap1:true}); const fo = scl(FARM,ak).map(p => [p[0]+FOy,p[1]+w*1.2,p[2]+w*1.1]); Fo_.loft(fo.reverse(), tc, {N:16,cap0:false,cap1:true,colFn:(x,y) => (y < FOy-.4 ? tt : null)}); return; }
+    if(isDress || tk === 'tank'){ return; }
+    if(shortS || longS){
+      const fat = tk === 'hoodie' || tk === 'puffer' ? .04 : tk === 'jacket' || tk === 'blazer' ? .032 : tk === 'jersey' ? .04 : .02;
+      const ucut = shortS ? -.26 : -.5, uc = scl(cut(UARM,0,ucut),ak).map(p => [p[0],p[1]+fat,p[2]+fat]);
+      const sc_ = (top.s || tc);
+      U_.loft(uc.reverse(), tk === 'jacket' && o.t && top.vs ? top.vs : sc_, {N:16,cap0:true,cap1:shortS,colFn:tk==='ankara'||top.p==='ankara' ? ankara(tc,tt) : null});
+      if(shortS){ U_.loft([[ucut+.0,UARM[2][1]*ak+fat+.012,UARM[2][1]*ak+fat+.012],[ucut-.02,UARM[2][1]*ak+fat+.01,UARM[2][1]*ak+fat+.01]], tt, {N:16,cap0:false,cap1:false}); }
+      if(longS){ const fc = scl(FARM,ak).map(p => [p[0]+FOy,p[1]+fat,p[2]+fat]); const fcc = fc.filter(p => p[0] > FOy-.4); fcc.push([FOy-.4,lerpDesc(FARM,-.4,1)*ak+fat*.8,lerpDesc(FARM,-.4,2)*ak+fat*.8]);
+        Fo_.loft(fcc.reverse(), tk === 'jacket' && top.vs ? top.vs : sc_, {N:16,cap0:true,cap1:true,colFn:top.p === 'ankara' || tk==='ankara' ? ankara(tc,tt) : null});
+        if(tk === 'hoodie' || tk === 'jacket' || tk === 'puffer') Fo_.loft([[FOy-.385,.073*ak+fat,.07*ak+fat],[FOy-.4,.07*ak+fat*.8,.066*ak+fat*.8]], shade(tc,-.2), {N:16,cap0:false,cap1:false});
+        if(tk === 'kaftan') Fo_.loft([[FOy-.36,.08*ak+fat,.075*ak+fat],[FOy-.4,.077*ak+fat,.072*ak+fat]], tt, {N:16,cap0:false,cap1:false}); }
+    }
+  };
+  armSpec(UL,FL,-1); armSpec(UR,FR,1);
+
+  const g = {body:B.geo(), uL:UL.geo(), uR:UR.geo(), fL:lite ? null : FL.geo(), fR:lite ? null : FR.geo(), tL:TL.geo(), tR:TR.geo(), sL:lite ? null : SL.geo(), sR:lite ? null : SR.geo(), F, swing, lite:!!lite};
+  avGeo[key] = g; return g;
+}
+function shade(hex,k){ const c = new THREE.Color(hex); if(k < 0) c.lerp(new THREE.Color('#000'), -k); else c.lerp(new THREE.Color('#fff'), k); return '#'+c.getHexString(); }
+function makeAvatar(look, lite){
+  look = Object.assign({skin:'#8A5A3B',outfit:'o_kaftan_in',cap:'c_hula_sand',acc:[],body:'m'}, look||{});
+  const P_ = avatarParts(look,lite), g = new THREE.Group(), rig = new THREE.Group(); g.add(rig);
+  const mat = AV_MAT, F = P_.F;
+  const part = (geo,parent,x,y) => { const m = new THREE.Mesh(geo,mat); m.position.set(x,y,0); m.castShadow = true; parent.add(m); return m; };
+  const body = part(P_.body,rig,0,0);
+  const piv = (parent,x,y) => { const p = new THREE.Group(); p.position.set(x,y,0); parent.add(p); return p; };
+  const hipL = piv(rig,-F.ax,1.2), hipR = piv(rig,F.ax,1.2), shL = piv(rig,-F.sh,2.19), shR = piv(rig,F.sh,2.19);
+  const mesh = (geo,par,y) => { if(!geo) return par; const m = new THREE.Mesh(geo,mat); m.castShadow = true; m.position.y = y||0; par.add(m); return m; };
+  mesh(P_.tL,hipL); mesh(P_.tR,hipR); mesh(P_.uL,shL); mesh(P_.uR,shR);
+  let kneeL = hipL, kneeR = hipR, elbL = shL, elbR = shR;
+  if(!P_.lite){ kneeL = piv(hipL,0,-.58); kneeR = piv(hipR,0,-.58); elbL = piv(shL,0,-.5); elbR = piv(shR,0,-.5);
+    mesh(P_.sL,kneeL); mesh(P_.sR,kneeR); mesh(P_.fL,elbL); mesh(P_.fR,elbR); }
+  shL.rotation.z = .07; shR.rotation.z = -.07; elbL.rotation.x = elbR.rotation.x = P_.lite ? 0 : -.12;
+  const blob = mk(GC,SHADOW,0,.03,0,1.7,.02,1.7,g); blob.userData.blob = true;
+  g.userData = {legL:hipL,legR:hipR,armL:shL,armR:shR,kneeL,kneeR,elbL,elbR,rig,body,swing:P_.swing,look,lite:!!P_.lite};
+  return g;
+}
+const person = (body, cap, skin) => makeAvatar({skin:skin||'#8A5A3B', outfit:'o_kaftan_in', cap:'c_hula_sand'}, true);
+function animPerson(g, ph, amt){ const u = g.userData; if(!u.legL) return; const sw = u.swing || 1, a = Math.sin(ph)*.8*amt*sw, b = -a;
+  u.legL.rotation.x = a; u.legR.rotation.x = b; u.armL.rotation.x = -a*.8/sw; u.armR.rotation.x = -b*.8/sw;
+  if(!u.lite){ u.kneeL.rotation.x = Math.max(0,a)*1.1*(1/sw)*Math.min(1,sw*1.3); u.kneeR.rotation.x = Math.max(0,b)*1.1*(1/sw)*Math.min(1,sw*1.3); const e = -.12-amt*.35; u.elbL.rotation.x = e - Math.max(0,-a)*.4; u.elbR.rotation.x = e - Math.max(0,-b)*.4; }
+  if(u.rig){ u.rig.position.y = Math.abs(Math.cos(ph))*.045*amt; u.body.rotation.y = Math.sin(ph)*.06*amt; } }
+function seatAvatar(g, on){ const u = g.userData; if(!on) return; u.legL.rotation.x = u.legR.rotation.x = -1.45; u.armL.rotation.x = u.armR.rotation.x = -.9; if(!u.lite){ u.kneeL.rotation.x = u.kneeR.rotation.x = 1.5; u.elbL.rotation.x = u.elbR.rotation.x = -.7; } }
+const lookCode = l => [SKINS.indexOf(l.skin), OUTFITS.findIndex(o => o.id === l.outfit), CAPS.findIndex(o => o.id === l.cap), (l.acc||[]).map(a => ACCS.findIndex(x => x.id === a)).join('.'), l.body === 'f' ? 1 : 0, l.hair || ''].join(',');
+function lookFromCode(s){ try{ const p = String(s).split(','); return {skin:SKINS[+p[0]]||SKINS[3], outfit:(OUTFITS[+p[1]]||OUTFITS[0]).id, cap:(CAPS[+p[2]]||CAPS[0]).id, acc:(p[3]||'').split('.').filter(x => x !== '').map(i => (ACCS[+i]||{}).id).filter(Boolean), body:p[4] === '1' ? 'f' : 'm', hair:(p[5]||'').slice(0,10)||undefined}; }catch(e){ return null; } }
+
+/* ---- c_post.js ---- */
+/* ===== POST: tone mapping, bloom glow and a gentle cinematic grade (hub scene only) ===== */
+const Post = (() => {
+  const P = {on:false, composer:null, bloom:null, grade:null};
+  const GRADE = {
+    uniforms:{tDiffuse:{value:null}, uExp:{value:.98}, uSat:{value:1.32}, uVig:{value:.3}, uNight:{value:0}},
+    vertexShader:'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+    fragmentShader:'uniform sampler2D tDiffuse; uniform float uExp,uSat,uVig,uNight; varying vec2 vUv;'+
+      'vec3 aces(vec3 x){ return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14),0.0,1.0); }'+
+      'void main(){ vec4 c = texture2D(tDiffuse,vUv); vec3 col = aces(c.rgb*uExp); float l = dot(col,vec3(.299,.587,.114)); col = mix(vec3(l),col,uSat);'+
+      ' col = mix(col, col*vec3(.86,.93,1.12), uNight*.6);'+
+      ' vec2 d = vUv-.5; float v = smoothstep(.85,.2,length(d)*(1.0+uVig)); col *= mix(1.0-uVig,1.0,v);'+
+      ' gl_FragColor = vec4(col,1.0); }'
+  };
+  P.init = (scene, cam) => {
+    try{
+      if(!THREE.EffectComposer || !THREE.UnrealBloomPass) return false;
+      const sz = renderer.getDrawingBufferSize(new THREE.Vector2());
+      let rt = null; try{ if(renderer.capabilities.isWebGL2 && THREE.WebGLMultisampleRenderTarget) rt = new THREE.WebGLMultisampleRenderTarget(sz.x,sz.y,{format:THREE.RGBAFormat,type:(renderer.extensions.has('EXT_color_buffer_float') || renderer.extensions.has('EXT_color_buffer_half_float')) ? THREE.HalfFloatType : THREE.UnsignedByteType}), rt.samples = 4; }catch(e){ rt = null; }
+      P.composer = rt ? new THREE.EffectComposer(renderer, rt) : new THREE.EffectComposer(renderer);
+      P.composer.setPixelRatio(1); P.composer.setSize(W*DPR, H*DPR);
+      P.composer.addPass(new THREE.RenderPass(scene, cam));
+      P.bloom = new THREE.UnrealBloomPass(new THREE.Vector2(W*DPR*.5,H*DPR*.5), .35, .55, .86); P.composer.addPass(P.bloom);
+      P.grade = new THREE.ShaderPass(GRADE); P.grade.renderToScreen = true; P.composer.addPass(P.grade);
+      P.scene = scene; P.cam = cam; P.ok = true; return true;
+    }catch(e){ P.ok = false; return false; }
+  };
+  P.enable = (v) => { v = !!v && P.ok && GFX === 'high'; if(v === P.on) return; P.on = v; renderer.toneMapping = v ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping; };
+  P.resize = () => { if(P.composer){ P.composer.setSize(W*DPR, H*DPR); } };
+  P.setNight = n => { if(P.bloom){ P.bloom.strength = .28 + n*.55; P.bloom.threshold = .9 - n*.18; P.grade.uniforms.uNight.value = n; } };
+  postResize = P.resize;
+  P.render = (dt) => { if(P.composer){ if(P.composer.passes[0]){ P.composer.passes[0].scene = P.scene; P.composer.passes[0].camera = P.cam; } P.composer.render(dt); } };
+  return P;
+})();
+
+/* ---- c_cars.js ---- */
+/* ===== SMOOTH CAR BODIES: lofted shells, glass, wheels, lights ===== */
+/* body axis is z (front = +z). Each ring: [z, halfWidth, yBottom, yTop]. */
+const CARSPEC = {
+  hatch:{L:6.8, ws:2.2, wr:.58, hw:1.78, sill:.55,
+    body:[[-3.4,1.25,.78,1.6],[-3.25,1.55,.62,1.95],[-2.4,1.74,.55,2.12],[1.4,1.78,.55,2.16],[2.7,1.72,.58,1.98],[3.25,1.55,.65,1.72],[3.4,1.25,.78,1.55]],
+    cab:[[1.55,1.2,2.1,2.25],[1.05,1.5,2.1,2.95],[.3,1.58,2.1,3.12],[-1.9,1.58,2.1,3.12],[-2.75,1.45,2.1,2.8],[-3.05,1.2,2.1,2.3]], n:3.4},
+  sedan:{L:8.2, ws:2.6, wr:.62, hw:1.9, sill:.58,
+    body:[[-4.1,1.5,.78,1.75],[-3.9,1.75,.64,2.05],[-3.0,1.9,.6,2.2],[0,1.95,.58,2.22],[3.0,1.92,.6,2.12],[3.85,1.8,.66,1.9],[4.1,1.5,.8,1.65]],
+    cab:[[1.75,1.15,2.15,2.25],[1.2,1.55,2.15,2.85],[.5,1.68,2.15,3.2],[-.4,1.68,2.15,3.28],[-1.6,1.62,2.15,3.2],[-2.5,1.45,2.15,2.8],[-2.95,1.15,2.15,2.3]], n:3.2},
+  coupe:{L:8.4, ws:2.7, wr:.62, hw:1.95, sill:.42,
+    body:[[-4.2,1.5,.62,1.5],[-4.0,1.82,.5,1.78],[-3.0,1.95,.45,1.9],[0,1.97,.42,1.9],[3.0,1.9,.46,1.75],[3.95,1.72,.5,1.5],[4.2,1.4,.6,1.28]],
+    cab:[[1.2,1.2,1.88,1.95],[.5,1.6,1.85,2.45],[-.5,1.66,1.85,2.62],[-1.8,1.6,1.85,2.45],[-2.7,1.4,1.85,2.1],[-3.0,1.15,1.85,1.95]], n:3.0},
+  suv:{L:8.2, ws:2.5, wr:.82, hw:2.0, sill:.85,
+    body:[[-4.1,1.6,.95,2.3],[-3.95,1.9,.85,2.65],[-3,2.0,.82,2.72],[0,2.02,.82,2.72],[3,1.98,.84,2.62],[3.85,1.85,.9,2.4],[4.1,1.6,1.0,2.2]],
+    cab:[[2.1,1.5,2.6,2.7],[1.6,1.75,2.6,3.45],[.9,1.88,2.6,3.78],[-2.8,1.88,2.6,3.78],[-3.7,1.75,2.6,3.55],[-3.95,1.55,2.6,3.0]], n:4.0},
+  suv2:{L:8.8, ws:2.7, wr:.9, hw:2.1, sill:.95,
+    body:[[-4.4,1.7,1.05,2.5],[-4.2,2.0,.92,2.85],[-3.2,2.1,.9,2.95],[0,2.12,.9,2.95],[3.2,2.08,.92,2.85],[4.1,1.95,1.0,2.6],[4.4,1.7,1.1,2.35]],
+    cab:[[2.2,1.55,2.88,2.98],[1.7,1.85,2.88,3.75],[1.0,1.98,2.88,4.05],[-3.0,1.98,2.88,4.05],[-3.95,1.85,2.88,3.8],[-4.2,1.6,2.88,3.2]], n:4.2},
+  pickup:{L:8.8, ws:2.8, wr:.84, hw:2.05, sill:.8,
+    body:[[4.4,1.65,1.05,2.1],[4.2,1.95,.88,2.5],[3.2,2.05,.84,2.62],[.3,2.08,.82,2.65],[-.2,2.08,.82,2.65]],
+    cab:[[1.8,1.5,2.6,2.75],[1.3,1.8,2.6,3.5],[.6,1.9,2.6,3.8],[-.9,1.9,2.6,3.8],[-1.5,1.8,2.6,3.55]], n:3.6}
+};
+function carBody(kind,p,d){
+  const S0 = CARSPEC[kind] || CARSPEC.sedan, mt = Math.max(...S0.body.map(r => r[3])), drop = (mt-S0.sill)*.16, S_ = Object.assign({}, S0, {body:S0.body.map(r => [r[0],r[1],r[2],S0.sill+(r[3]-S0.sill)*.84]), cab:S0.cab.map(r => [r[0],r[1],r[2]-drop,r[3]-drop])}), W_ = '#ffffff', GL = '#1b2a3c', TY = '#15151a', CH = '#b9bec8', LT = '#fff3c4', TL = '#d8302a', DK = '#1b1b22';
+  const ring = (r,n) => [r[0], r[1], (r[3]-r[2])/2, 0, -(r[3]+r[2])/2, n];      // axis pos, half-width, half-height, -centre height (after rotation y = -z_local)
+  const ROT = [Math.PI/2,0,0], ord = rs => rs.slice().sort((a,b) => a[0]-b[0]);
+  // main shell (paint)
+  p.loft(ord(S_.body).map(r => ring(r,4.2)), W_, {N:36, rot:ROT, cap0:true, cap1:true, colFn:(x,yy,zh) => ((-zh) < S_.sill+.32 ? '#4a4a52' : null)});
+  if(kind === 'pickup'){
+    // rear bed: outer shell + dark floor + side walls
+    const bed = [[-.3,2.06,.84,2.62],[-1,2.06,.84,2.7],[-4.1,2.02,.84,2.7],[-4.4,1.9,.88,2.6]];
+    p.loft(ord(bed).map(r => ring(r,6)), W_, {N:30, rot:ROT, cap0:true, cap1:true});
+    d.box(0,2.62,-2.45,3.1,.1,3.7,'#26262c',0,0,0,1); // open bed floor
+    p.box(0,2.88,-4.3,3.9,.4,.2,W_,0,0,0,1); p.box(-1.9,2.88,-2.4,.2,.4,3.8,W_,0,0,0,1); p.box(1.9,2.88,-2.4,.2,.4,3.8,W_,0,0,0,1);
+    d.box(0,2.5,-1.0,3.5,.5,.1,'#26262c',0,0,0,1);
+  }
+  // greenhouse (paint) + glass band (detail)
+  const cab = ord(S_.cab);
+  p.loft(cab.map(r => ring(r,S_.n)), W_, {N:34, rot:ROT, cap0:true, cap1:true});
+  const gl = cab.map(r => { const hgt = r[3]-r[2]; return hgt > .55 ? [r[0], r[1]*1.012, r[2]+Math.min(.22,hgt*.16), r[3]-Math.min(.2,hgt*.18)] : null; }).filter(Boolean);
+  if(gl.length > 2) d.loft(gl.map(r => ring(r,S_.n)), GL, {N:34, rot:ROT, cap0:false, cap1:false});
+  const zc = (cab[1][0]+cab[cab.length-2][0])/2;
+  // bumpers / grille / diffuser (detail)
+  const zf = S_.body[S_.body.length-1][0] > 0 ? Math.max(...S_.body.map(r => r[0])) : 0, zb = Math.min(...S_.body.map(r => r[0]));
+  const by = S_.sill+.42, hw = S_.hw;
+  d.box(0,by,zf-.05,hw*1.35,.55,.28,DK,0,0,0,1); d.box(0,by-.18,zb+.05,hw*1.45,.45,.28,DK,0,0,0,1);
+  d.box(0,by+.65,zf+.02,hw*.9,.36,.1,'#0c0c10',0,0,0,1); d.box(0,by+.65,zf+.07,hw*.7,.06,.05,CH,0,0,0,1);
+  if(kind === 'suv2' || kind === 'suv') for(let i = -2; i <= 2; i++) d.box(i*.28,by+.65,zf+.1,.04,.34,.04,CH,0,0,0,1);
+  // lights
+  for(const s of [-1,1]){
+    d.ell(s*(hw*.66),by+.7,zf-.28,.42,.17,.14,LT,{L:6,N:14}); d.ell(s*(hw*.66),by+.7,zb+.25,.42,.15,.14,TL,{L:6,N:14});
+    
+    // mirrors
+    const cr = cab[1]; d.ell(s*(cr[1]+.18),cr[2]+.1,cr[0]-.45,.14,.14,.26,'#15151a',{L:5,N:10});
+  }
+  // plates
+  d.box(0,by-.15,zf+.18,.95,.34,.04,'#f0f0f0',0,0,0,1); d.box(0,by-.12,zb-.18,.95,.34,.04,'#f0f0f0',0,0,0,1);
+  // door shut-lines and handles
+  const dz = [zc-1.0, zc+1.0, zc+2.2]; for(const s of [-1,1]){ for(const z of [zc-.1, zc+(S_.ws*.95)]) d.box(s*(hw*1.035),S_.sill+.95,z,.03,1.3,.04,'#0e0e12',0,0,0,1); d.box(s*(hw+.04),by+.85,zc+.4,.06,.07,.5,CH,0,0,0,1); void dz; }
+  // wheels: dark arches, tyres, rims
+  const wz = [S_.ws,-S_.ws], wr = S_.wr, wx = hw-.02;
+  for(const z of wz) for(const s of [-1,1]){
+    d.cylx(s*(wx-.02),wr,z,wr*1.28,.12,'#0a0a0e'); // arch
+    d.cylx(s*(wx-.1),wr,z,wr,.62,TY); d.cylx(s*(wx+.1),wr,z,wr*.66,.2,'#8a909b'); d.cylx(s*(wx+.14),wr,z,wr*.22,.12,'#2a2a32');
+    for(let k = 0; k < 5; k++){ const a = k/5*6.283; d.box(s*(wx+.13),wr+Math.sin(a)*wr*.4,z+Math.cos(a)*wr*.4,.06,wr*.12,wr*.5,'#6b717c',a,0,0,1); }
+  }
+  if(kind === 'coupe'){ d.box(0,2.12,zb+.7,hw*1.5,.08,.8,'#15151c',0,0,0,1); for(const s of [-1,1]) d.box(s*hw*.7,1.95,zb+.7,.1,.32,.6,'#15151c',0,0,0,1); }
+  if(kind === 'suv' || kind === 'suv2'){ for(const s of [-1,1]) d.box(s*cab[2][1]*.62,cab[2][3]+.04,(cab[2][0]+cab[cab.length-3][0])/2,.08,.08,Math.abs(cab[2][0]-cab[cab.length-3][0])*.85,'#23232a',0,0,0,1); }
+}
 
 /* ---- d1_world.js ---- */
 /* ===== WORLD 1: chunks, collision, road network, ground, bridges ===== */
@@ -1843,8 +3077,8 @@ const Env = (() => {
     // lights
     E.hemi = new THREE.HemisphereLight('#bcd8f0','#7c8a64',.95); scene.add(E.hemi);
     E.sun = new THREE.DirectionalLight('#fff2d4',.85); E.sun.castShadow = true; scene.add(E.sun, E.sun.target);
-    E.shadowSize = () => GFX === 'high' ? 2048 : 1024;
-    const sc = E.sun.shadow.camera; sc.left = -70; sc.right = 70; sc.top = 70; sc.bottom = -70; sc.near = 10; sc.far = 400; E.sun.shadow.bias = -.0006; E.sun.shadow.normalBias = .4; E.sun.shadow.mapSize.set(E.shadowSize(),E.shadowSize());
+    E.shadowSize = () => GFX === 'high' ? 4096 : 1536;
+    const sc = E.sun.shadow.camera; sc.left = -62; sc.right = 62; sc.top = 62; sc.bottom = -62; sc.near = 10; sc.far = 400; E.sun.shadow.bias = -.0006; E.sun.shadow.normalBias = .4; E.sun.shadow.mapSize.set(E.shadowSize(),E.shadowSize());
     scene.fog = new THREE.Fog('#cfe3ee',130,620);
     // river
     const wt = TEX.water.clone(); wt.needsUpdate = true; wt.wrapS = wt.wrapT = THREE.RepeatWrapping; wt.repeat.set(70,5);
@@ -1876,18 +3110,26 @@ const Env = (() => {
     E.stars = new THREE.Points(sgm, new THREE.PointsMaterial({color:'#fff',size:3,sizeAttenuation:false,transparent:true,opacity:0,fog:false,depthWrite:false})); E.stars.frustumCulled = false; scene.add(E.stars);
     // Harmattan haze or rain streaks
     E.hz = SEASON === 'Harmattan' ? 1 : RAINY ? .5 : 0;
+    // soft image-based lighting + reflections (a painted sky dome baked once)
+    try{
+      const es = new THREE.Scene(), g = new THREE.SphereGeometry(50,24,16), cc = [], pos = g.attributes.position;
+      for(let i = 0; i < pos.count; i++){ const y = pos.getY(i)/50, t = clamp(y*.5+.5,0,1); const top = new THREE.Color('#5f9be0'), hor = new THREE.Color('#ffe9c8'), gnd = new THREE.Color('#6d7a58'); const c = y > 0 ? hor.clone().lerp(top,Math.pow(y,.6)) : hor.clone().lerp(gnd,Math.min(1,-y*2.4)); cc.push(c.r*1.15,c.g*1.15,c.b*1.15); void t; }
+      g.setAttribute('color', new THREE.Float32BufferAttribute(cc,3)); es.add(new THREE.Mesh(g,new THREE.MeshBasicMaterial({vertexColors:true,side:THREE.BackSide})));
+      const sunb = new THREE.Mesh(new THREE.SphereGeometry(5,8,6),new THREE.MeshBasicMaterial({color:'#fff4d0'})); sunb.position.set(30,32,18); es.add(sunb);
+      const pm = new THREE.PMREMGenerator(renderer); E.envTex = pm.fromScene(es,.02).texture; scene.environment = E.envTex; pm.dispose();
+    }catch(e){}
     E.setN(0); return E;
   };
   const mix3 = (A,B,k,out) => out.copy(A).lerp(B,k);
   E.setN = (n, dusk) => {
-    E.n = n; const d = dusk || 0; E.hz = SEASON === 'Harmattan' ? 1 : RAINY ? .5 : 0;
+    E.n = n; const d = dusk || 0; { const ei = lerp(1,.22,n); AV_MAT.envMapIntensity = ei*.7; for(const k in paintMats) paintMats[k].envMapIntensity = ei*.8; detailMat.envMapIntensity = ei*.8; } E.hz = SEASON === 'Harmattan' ? 1 : RAINY ? .5 : 0;
     const set = (key) => { const a = SKY.day[key], b = SKY.dusk[key], c = SKY.night[key]; tmp[key].copy(a).lerp(b,d).lerp(c,n); return tmp[key]; };
     for(const k in tmp) set(k);
     const sk = E.sky.geometry, p = sk.attributes.position, c = sk.attributes.color;
     for(let i = 0; i < p.count; i++){ const y = p.getY(i)/1000, t = clamp(y*1.7,0,1), k = Math.pow(t,.7); c.setXYZ(i, tmp.hor.r+(tmp.top.r-tmp.hor.r)*k, tmp.hor.g+(tmp.top.g-tmp.hor.g)*k, tmp.hor.b+(tmp.top.b-tmp.hor.b)*k); }
     c.needsUpdate = true;
-    E.hemi.color.copy(tmp.hemiS); E.hemi.groundColor.copy(tmp.hemiG); E.hemi.intensity = lerp(.95,.55,n);
-    E.sun.color.copy(tmp.sun); E.sun.intensity = lerp(.85,.35,n)*(1-d*.2);
+    E.hemi.color.copy(tmp.hemiS); E.hemi.groundColor.copy(tmp.hemiG); E.hemi.intensity = lerp(.78,.5,n);
+    E.sun.color.copy(tmp.sun); E.sun.intensity = lerp(1.15,.35,n)*(1-d*.2);
     scene.fog.color.copy(tmp.fog); if(E.hz){ scene.fog.near = 90; scene.fog.far = RAINY ? 420 : 460; } else { scene.fog.near = 130; scene.fog.far = 640; }
     E.stars.material.opacity = clamp((n-.45)*2,0,1); E.lampPts.material.opacity = clamp(n*1.25-.1,0,1);
     for(const m of MAT.fac){ m.emissive.setScalar(clamp(n*1.2-.15,0,1)); }
@@ -2036,10 +3278,10 @@ Traffic.makePeds = function(){
   for(const n of NSR){ const br = EWR.map(e => { const R = roundAt(n.x,e.z); const rr = R ? R.Ro+SWK : AR; return [e.z-rr+1, e.z+rr-1]; }); for(const s of [-1,1]) for(const [a,b] of walkSegs('z',n.x,10,RIVER.z0-10,br)) if(b-a > 30) segs.push({ax:'z',c:n.x+s*(AR+SWK/2),a,b,h:.22}); }
   for(const m of MINORS) for(const s of [-1,1]) segs.push({ax:m.ax === 'z' ? 'z' : 'x',c:m.c+s*(MINW+MSW/2),a:m.a+8,b:m.b-8,h:.2});
   const N = COARSE ? 40 : 80; seedR(77);
-  const outfits = OUTFITS.slice(0,10), caps = CAPS.slice(0,6);
+  const outfitsM = OUTFITS.filter(o => o.tier <= 2 && o.g !== 'f'), outfitsF = OUTFITS.filter(o => o.tier <= 2 && o.g !== 'm'), caps = CAPS.slice(0,6), HM = ['h_bald','h_crop','h_fade','h_afro','h_twist'], HF = ['h_low','h_afro','h_braids','h_bun','h_bob'];
   for(let i = 0; i < N; i++){ const sg = segs[Math.floor(Math.random()*segs.length)]; if(!sg || sg.b-sg.a < 20) continue;
-    const look = {skin:pick(SKINS),outfit:pick(outfits).id,cap:pick(caps).id,acc:Math.random() < .2 ? ['a_shades'] : []};
-    const g = makeAvatar(look); g.scale.setScalar(.9+Math.random()*.15); worldRoot.add(g);
+    const fem = Math.random() < .45, look = {skin:pick(SKINS),body:fem ? 'f' : 'm',outfit:pick(fem ? outfitsF : outfitsM).id,cap:fem ? 'c_none' : (Math.random() < .5 ? pick(caps).id : 'c_none'),hair:pick(fem ? HF : HM),acc:Math.random() < .15 ? ['a_shades'] : []};
+    const g = makeAvatar(look,true); g.scale.setScalar(.9+Math.random()*.15); worldRoot.add(g);
     Traffic.peds.push({g,sg,t:rnd(sg.a,sg.b),dir:Math.random() < .5 ? 1 : -1,v:rnd(1.1,1.9),ph:Math.random()*6,stop:0}); }
 };
 Traffic.updatePeds = function(dt,px,pz){
@@ -2534,7 +3776,7 @@ const Online = (() => {
     clearTimeout(model.userData.bubT); model.userData.bubT = setTimeout(() => { if(model.userData.bub === b){ model.remove(b); model.userData.bub = null; } }, 5200);
   }
   function build(o){
-    const g = new THREE.Group(), look = lookFromCode(o.k) || {}; const av = makeAvatar(look); g.add(av); g.userData.av = av;
+    const g = new THREE.Group(), look = lookFromCode(o.k) || {}; const av = makeAvatar(look,true); g.add(av); g.userData.av = av;
     const l = makeLabel((o.name||'Player').slice(0,16)+'  L'+(o.l||1), .8); l.position.set(0,4.2,0); g.add(l);
     g.position.set(o.x, 0, o.z); g.rotation.y = o.yaw || 0; worldRoot.add(g); o.m = g;
   }
@@ -3254,7 +4496,7 @@ const FCATS = ['Bedroom','Living','Tech','Games','Decor'];
 const HOME = (() => {
   const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(34,1,.5,300);
   const root = new THREE.Group(); scene.add(root);
-  const hemi = new THREE.HemisphereLight('#ffffff','#a89878',.95), dl = new THREE.DirectionalLight('#fff0d0',.9); dl.position.set(14,26,10); dl.castShadow = true; const sc = dl.shadow.camera; sc.left = -20; sc.right = 20; sc.top = 20; sc.bottom = -20; sc.near = 1; sc.far = 80; dl.shadow.mapSize.set(1024,1024); dl.shadow.bias = -.0008;
+  const hemi = new THREE.HemisphereLight('#ffffff','#a89878',.7), dl = new THREE.DirectionalLight('#fff0d0',1.1); dl.position.set(14,26,10); dl.castShadow = true; const sc = dl.shadow.camera; sc.left = -20; sc.right = 20; sc.top = 20; sc.bottom = -20; sc.near = 1; sc.far = 80; dl.shadow.mapSize.set(1024,1024); dl.shadow.bias = -.0008;
   scene.add(hemi); scene.add(dl);
   let inst = [], shell = null, hAv = null, edit = false, sel = null, drag = null, bar = null, selRing = null, T = homeTier();
   const P = {x:0,z:0,hd:0,v:0,ph:0}, pCool = {};
@@ -3552,7 +4794,7 @@ function snap(key,w,h,build,camPos,look,fov){
 const lookKey = l => lookCode(l)+'|'+l.skin;
 function avSnap(look,w,h,mode){
   const av = () => { const a = makeAvatar(look); a.rotation.y = mode === 'back' ? Math.PI : mode === 'side' ? Math.PI/2 : .35; return a; };
-  const cfg = mode === 'cap' ? [[0,3.9,3.6],[0,3.6,0]] : mode === 'bust' ? [[0,3.2,6],[0,2.7,0]] : [[0,2.4,9.4],[0,1.9,0]];
+  const cfg = mode === 'cap' ? [[0,3.45,3.6],[0,3.05,0]] : mode === 'bust' ? [[0,3.0,3.9],[0,2.5,0]] : [[0,2.2,8.6],[0,1.65,0]];
   return snap('av|'+lookKey(look)+'|'+w+'|'+h+'|'+mode,w,h,av,cfg[0],cfg[1]);
 }
 function vehSnap(kind,col,w,h){ return snap('v|'+kind+'|'+col+'|'+w+'|'+h,w,h,() => { const v = makeVehicle(kind,col,false); v.rotation.y = -.7; return v; },[8,6,10],[0,1.2,0]); }
@@ -3574,9 +4816,9 @@ const tierName = t => ['','Starter','Smart','Premium','Elite'][t]||'';
 let wTab = 'outfit', wShop = false;
 function openWear(shop){
   if(typeof shop === 'boolean') wShop = shop; const L = S.look;
-  const tabs = [['outfit','Outfits'],['cap','Caps'],['acc','Extras'],['skin','Skin']].map(t => '<button class="chip'+(wTab === t[0] ? ' on' : '')+'" data-act="wtab" data-t="'+t[0]+'">'+t[1]+'</button>').join('');
+  const tabs = [['outfit','Outfits'],['cap','Caps'],['acc','Extras'],['skin','Look']].map(t => '<button class="chip'+(wTab === t[0] ? ' on' : '')+'" data-act="wtab" data-t="'+t[0]+'">'+t[1]+'</button>').join('');
   let body = '';
-  if(wTab === 'outfit'){ body = '<div class="grid">'+OUTFITS.map(o => { const own = S.ownOutfit.includes(o.id), on = L.outfit === o.id;
+  if(wTab === 'outfit'){ body = '<div class="grid">'+outfitsFor(L.body).slice().sort((a,b) => a.tier-b.tier || a.p-b.p).map(o => { const own = S.ownOutfit.includes(o.id), on = L.outfit === o.id;
       return '<div class="cardx'+(on ? ' on' : '')+'"><div class="thumb">'+th({t:'av',look:Object.assign({},L,{outfit:o.id}),m:'bust'})+'</div><b>'+esc(o.n)+'</b><small>'+tierName(o.tier)+(o.p ? ' | '+fmt(o.p) : ' | Free')+'</small>'+
         (on ? '<button class="btn alt" disabled>Wearing</button>' : own ? '<button class="btn" data-act="oeq" data-id="'+o.id+'">Wear</button>' : '<button class="btn gold" data-act="obuy" data-id="'+o.id+'">Buy '+fmt(o.p)+'</button>')+'</div>'; }).join('')+'</div>'; }
   else if(wTab === 'cap'){ body = '<div class="grid">'+CAPS.map(o => { const own = S.ownCap.includes(o.id), on = L.cap === o.id;
@@ -3586,7 +4828,9 @@ function openWear(shop){
       const l2 = Object.assign({},L,{acc:on ? L.acc : (L.acc||[]).concat(o.id)});
       return '<div class="cardx'+(on ? ' on' : '')+'"><div class="thumb">'+th({t:'av',look:l2,m:'bust'})+'</div><b>'+esc(o.n)+'</b><small>'+fmt(o.p)+' | style +'+o.sc+'</small>'+
         (own ? '<button class="btn'+(on ? ' alt' : '')+'" data-act="atog" data-id="'+o.id+'">'+(on ? 'Take off' : 'Put on')+'</button>' : '<button class="btn gold" data-act="abuy" data-id="'+o.id+'">Buy '+fmt(o.p)+'</button>')+'</div>'; }).join('')+'</div>'; }
-  else { body = '<p class="muted">Pick a skin tone.</p><div class="sw" style="margin:8px 0 16px">'+SKINS.map(c => '<button data-act="skin" data-c="'+c+'" class="'+(L.skin === c ? 'on' : '')+'" style="background:'+c+'" aria-label="Skin tone"></button>').join('')+'</div>'; }
+  else { body = '<label class="lbl">Skin tone</label><div class="sw" style="margin:8px 0 16px">'+SKINS.map(c => '<button data-act="skin" data-c="'+c+'" class="'+(L.skin === c ? 'on' : '')+'" style="background:'+c+'" aria-label="Skin tone"></button>').join('')+'</div>'+
+    '<label class="lbl">Body</label><div class="chips"><button class="chip'+(L.body !== 'f' ? ' on' : '')+'" data-act="body" data-v="m">Male</button><button class="chip'+(L.body === 'f' ? ' on' : '')+'" data-act="body" data-v="f">Female</button></div>'+
+    '<label class="lbl">Hair</label><div class="chips">'+HAIRS[L.body === 'f' ? 'f' : 'm'].map(h => '<button class="chip'+(L.hair === h[0] ? ' on' : '')+'" data-act="hair" data-v="'+h[0]+'">'+h[1]+'</button>').join('')+'</div>'; }
   sheetHTML('<h2>'+(wShop ? 'Sarki Tailors' : 'Your wardrobe')+'</h2><p class="muted">Wallet <span class="price">'+fmt(S.money)+'</span> | Style score <span class="price">'+styleScore()+'</span>. Better outfits and caps raise your style, which opens doors like the Arewa Terrace Lounge.</p>'+
     '<div class="prev" style="aspect-ratio:3/2;max-height:230px">'+th({t:'av',look:L,m:'full'},480,320)+'</div>'+
     '<div class="tabs">'+tabs+'</div>'+body+'<div class="btnrow"><button class="btn alt" data-act="close">Done</button></div>','wear');
@@ -3601,6 +4845,8 @@ function wearAct(a,d){
   if(a === 'cbuy'){ const o = cOf(d.id); if(!spend(o.p,'New cap: '+o.n)) return true; S.ownCap.push(o.id); L.cap = o.id; lookChanged(); openWear(); return true; }
   if(a === 'abuy'){ const o = ACCS.find(x => x.id === d.id); if(!spend(o.p,'Bought: '+o.n)) return true; S.ownAcc.push(o.id); L.acc = (L.acc||[]).concat(o.id); lookChanged(); openWear(); return true; }
   if(a === 'atog'){ const has = (L.acc||[]).includes(d.id); L.acc = has ? L.acc.filter(x => x !== d.id) : (L.acc||[]).concat(d.id); lookChanged(); openWear(); return true; }
+  if(a === 'hair'){ L.hair = d.v; lookChanged(); openWear(); return true; }
+  if(a === 'body'){ L.body = d.v; L.hair = HAIRS[d.v][0][0]; if(!outfitsFor(d.v).some(o => o.id === L.outfit)){ const ok = S.ownOutfit.map(oOf).find(o => o.g === 'u' || o.g === d.v); L.outfit = (ok || outfitsFor(d.v)[0]).id; if(!S.ownOutfit.includes(L.outfit)) S.ownOutfit.push(L.outfit); } lookChanged(); openWear(); return true; }
   if(a === 'skin'){ L.skin = d.c; lookChanged(); openWear(); return true; }
   return false;
 }
@@ -3956,15 +5202,17 @@ function act(a, d, el){
   let draft = null;
   function openCreator(){
     splash.classList.add('out'); setTimeout(() => { splash.hidden = true; }, 500);
-    draft = {name:'', unguwa:UNGUWAS[0], look:Object.assign({},S.look,{skin:SKINS[3],outfit:OUTFITS[0].id,cap:'c_hula_sand',acc:[]}), view:'full'};
+    draft = {name:'', unguwa:UNGUWAS[0], look:Object.assign({},S.look,{skin:SKINS[3],outfit:OUTFITS[0].id,cap:'c_hula_sand',acc:[],body:'m',hair:'h_crop'}), view:'full'};
     create.hidden = false; mode = 'create'; renderCreator();
   }
   function renderCreator(keep){
-    const starters = OUTFITS.filter(o => o.p === 0), caps = CAPS.filter(c => c.p === 0);
+    const starters = outfitsFor(draft.look.body).filter(o => o.p === 0), caps = CAPS.filter(c => c.p === 0);
     const html = '<div class="cbox"><h2 style="font-size:26px">Make your character</h2><p class="muted">Choose who you are. You can upgrade outfits, caps and extras from the tailor any time.</p>'+
       '<div class="prev">'+th({t:'av',look:draft.look,m:draft.view},640,480)+'</div><div class="chips" style="justify-content:center;margin-bottom:6px"><button class="chip'+(draft.view === 'full' ? ' on' : '')+'" data-c="view" data-v="full">Front</button><button class="chip'+(draft.view === 'side' ? ' on' : '')+'" data-c="view" data-v="side">Side</button><button class="chip'+(draft.view === 'back' ? ' on' : '')+'" data-c="view" data-v="back">Back</button></div>'+
       '<label class="lbl">Your name</label><input type="text" id="cName" maxlength="14" placeholder="e.g. Aisha, Sani, Dan Kaduna" value="'+esc(draft.name)+'" autocomplete="off">'+
       '<label class="lbl">Home Unguwa</label><div class="chips">'+UNGUWAS.map(u => '<button class="chip'+(draft.unguwa === u ? ' on' : '')+'" data-c="ung" data-v="'+u+'">'+u+'</button>').join('')+'</div>'+
+      '<label class="lbl">Body</label><div class="chips"><button class="chip'+(draft.look.body !== 'f' ? ' on' : '')+'" data-c="body" data-v="m">Male</button><button class="chip'+(draft.look.body === 'f' ? ' on' : '')+'" data-c="body" data-v="f">Female</button></div>'+
+      '<label class="lbl">Hair</label><div class="chips">'+HAIRS[draft.look.body === 'f' ? 'f' : 'm'].map(h => '<button class="chip'+(draft.look.hair === h[0] ? ' on' : '')+'" data-c="hair" data-v="'+h[0]+'">'+h[1]+'</button>').join('')+'</div>'+
       '<label class="lbl">Skin tone</label><div class="sw">'+SKINS.map(c => '<button data-c="skin" data-v="'+c+'" class="'+(draft.look.skin === c ? 'on' : '')+'" style="background:'+c+'" aria-label="Skin tone"></button>').join('')+'</div>'+
       '<label class="lbl">Starting outfit</label><div class="grid">'+starters.map(o => '<button class="cardx'+(draft.look.outfit === o.id ? ' on' : '')+'" data-c="outfit" data-v="'+o.id+'"><div class="thumb">'+th({t:'av',look:Object.assign({},draft.look,{outfit:o.id}),m:'bust'})+'</div><b>'+esc(o.n)+'</b></button>').join('')+'</div>'+
       '<label class="lbl">Cap</label><div class="chips">'+caps.map(c => '<button class="chip'+(draft.look.cap === c.id ? ' on' : '')+'" data-c="cap" data-v="'+c.id+'">'+esc(c.n)+'</button>').join('')+'</div>'+
@@ -3974,7 +5222,7 @@ function act(a, d, el){
   create.addEventListener('click', e => {
     const b = e.target.closest('[data-c]'), nx = e.target.closest('#cNext'); if(!draft) return;
     if(b){ const v = b.dataset.v, nm = $('#cName'); if(nm) draft.name = nm.value; sfx.tap();
-      if(b.dataset.c === 'view') draft.view = v; else if(b.dataset.c === 'ung') draft.unguwa = v; else if(b.dataset.c === 'skin') draft.look.skin = v; else if(b.dataset.c === 'outfit') draft.look.outfit = v; else if(b.dataset.c === 'cap') draft.look.cap = v;
+      if(b.dataset.c === 'view') draft.view = v; else if(b.dataset.c === 'ung') draft.unguwa = v; else if(b.dataset.c === 'skin') draft.look.skin = v; else if(b.dataset.c === 'outfit') draft.look.outfit = v; else if(b.dataset.c === 'cap') draft.look.cap = v; else if(b.dataset.c === 'hair') draft.look.hair = v; else if(b.dataset.c === 'body'){ draft.look.body = v; draft.look.hair = HAIRS[v][0][0]; draft.look.outfit = outfitsFor(v).filter(o => o.p === 0)[0].id; }
       renderCreator(true); return; }
     if(nx){ const nm = cleanText(($('#cName')||{}).value||'').slice(0,14); if(nm.length < 2){ toast('Pick a name with at least 2 letters.'); $('#cName').focus(); return; } if(BAD.test(nm)){ toast('Pick a different name.'); return; }
       sfx.tap(); S.name = nm; S.unguwa = draft.unguwa; S.look = Object.assign({},draft.look); S.ownOutfit = OUTFITS.filter(o => o.p === 0).map(o => o.id); S.ownCap = CAPS.filter(c => c.p === 0).map(c => c.id); S.created = true; S.home.items = []; S.home.init = false; S.carPos = null; save();
@@ -4303,6 +5551,7 @@ function startGame(){
 function splashCam(t){ const a = t/22000, R = 120, c = ROUND[0]; camera.position.set(c.x+Math.cos(a)*R,52+Math.sin(a*1.7)*5,c.z+Math.sin(a)*R); camera.lookAt(c.x,10,c.z); fitCam(camera); }
 let last = performance.now(), saveAcc = 0;
 buildAll();
+Post.init(scene,camera);
 HOME.init();
 rebuildAvatar(); pAv.visible = false;
 const netPos = () => ({x:PL.x,z:PL.z,yaw:PL.hd,veh:PL.mode === 'drive' ? S.car : '',vcol:(S.carCol && S.carCol[S.car]) || CAR_COLS[Math.max(0,CARS.findIndex(c => c.id === S.car))%CAR_COLS.length]});
@@ -4318,11 +5567,12 @@ function frame(now){
     else splashCam(now);
     const f = mode === 'hub' ? PL : {x:camera.position.x,z:camera.position.z};
     Env.syncTime(); Env.update(dt,f); Traffic.update(dt,f); updLabels(f); Ads.update(dt,camera,Ads.hubList(),mode === 'hub' && !adminOpen); Online.tick(dt,netPos(),true); updBursts(dt);
-    renderer.render(scene,camera);
+    Post.enable(true); Post.setNight(Env.n); if(Post.on) Post.render(dt); else renderer.render(scene,camera);
     if(mode === 'hub'){ drawWeather(); drawWaypoint(); updateHud(dt); }
   } else if(mode === 'home'){
-    readInput(); HOME.update(dt,now); renderer.render(HOME.scene,HOME.cam); drawWeather(); updateHud(dt); Online.tick(dt,netPos(),false);
+    readInput(); HOME.update(dt,now); Post.enable(false); renderer.render(HOME.scene,HOME.cam); drawWeather(); updateHud(dt); Online.tick(dt,netPos(),false);
   } else if(mode === 'mini' || mode === 'result'){
+    Post.enable(false);
     if(mini){ if(mode === 'mini') mini.update(dt);
       if(mini.cam){ Ads.update(dt,mini.cam,Ads.miniList(),mode === 'mini'); fitCam(mini.cam); } if(mini.scene) renderer.render(mini.scene,mini.cam); else { renderer.setClearColor(0x0f0a24,1); renderer.clear(); }
       mini.draw(now); }
@@ -4331,7 +5581,7 @@ function frame(now){
   saveAcc += dt; if(saveAcc > 12){ saveAcc = 0; save(); }
   requestAnimationFrame(frame);
 }
-window.__KD = {PL,IN,camera,scene,Env,renderer,S,Online,LM,Traffic,HOME,go:(x,z,hd) => teleport(x,z,hd), setMode:m => { mode = m; }, start:() => startGame(), night:n => { FORCE_NIGHT = n; }, mini:() => mini, startMini, leaveMini, openAuto, toggleDrive, cam:(o) => Object.assign(PL.cam,o), enterHome, openSheet, fn:{openWear,openGarage,openAuto,openFurnShop,openMap,openChat,openCash,openGames,openMe,openRadio,openProfile,openMarket,openHero,openUpgrade,openSettings,openDMs,openBag,openStyle,openClub,openLounge}};
+window.__KD = {PL,IN,camera,scene,Env,renderer,S,Online,LM,Traffic,HOME,go:(x,z,hd) => teleport(x,z,hd), setMode:m => { mode = m; }, start:() => startGame(), night:n => { FORCE_NIGHT = n; }, mini:() => mini, startMini, leaveMini, openAuto, toggleDrive, cam:(o) => Object.assign(PL.cam,o), enterHome, openSheet, veh:(k,c,w,h) => vehSnap(k,c,w,h).toDataURL(), av:(l,w,h,m) => avSnap(l,w,h,m).toDataURL(), makeAvatar, fn:{openWear,openGarage,openAuto,openFurnShop,openMap,openChat,openCash,openGames,openMe,openRadio,openProfile,openMarket,openHero,openUpgrade,openSettings,openDMs,openBag,openStyle,openClub,openLounge}};
 Online.init().then(ok => { if(ok){ Ads.connect(); Online.onMessage(() => {}); } });
 requestAnimationFrame(frame);
 
